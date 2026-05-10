@@ -1,26 +1,31 @@
 import os, re, json, time, requests, urllib.parse
-import subprocess  # 确保开头导入了这个模块
+import subprocess
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+# --- 1. Git 自动同步函数 ---
 def git_push_backup(count):
-    """阶段性强制备份"""
+    """阶段性强制备份，确保 17.7 万数据不丢失"""
     try:
-        # 配置用户信息，防止在 Actions 环境中报错
+        # 配置基础信息
         subprocess.run(["git", "config", "--local", "user.email", "action@github.com"], check=True)
         subprocess.run(["git", "config", "--local", "user.name", "GitHub Action"], check=True)
+        
+        # 拉取远程更新，防止中途推送冲突
+        subprocess.run(["git", "pull", "origin", "main", "--rebase"], check=True)
+        
         subprocess.run(["git", "add", "."], check=True)
-        # 加入时间戳和数量，让 commit 记录更清晰
-        msg = f"自动备份: 已捕获 {count} 条资源"
+        msg = f"自动备份: 累计新增 {count} 条资源"
         subprocess.run(["git", "commit", "-m", msg], check=True)
-        subprocess.run(["git", "push"], check=True)
-        print(f"🚀 [同步成功] 已将当前捕获的 {count} 条数据推送至仓库")
+        subprocess.run(["git", "push", "origin", "main"], check=True)
+        print(f"🚀 [同步成功] 已成功分批推送 {count} 条数据至仓库")
     except Exception as e:
-        print(f"⚠️ [同步跳过] 暂无新内容或推送失败: {e}")
-    
-    def load_config():
+        print(f"⚠️ [同步跳过] 可能无新内容或冲突: {e}")
+
+# --- 2. 配置加载 ---
+def load_config():
     default_config = {
         "BASE_URL": "http://ck0d.cc",
         "CATS": [
@@ -47,11 +52,8 @@ def git_push_backup(count):
 config = load_config()
 BASE_URL = config["BASE_URL"]
 CATS = config["CATS"]
-# 自动计算刹车日期
-target_date = datetime.now() - timedelta(days=config.get("STOP_DAYS_AGO", 1))
-STOP_MONTH = target_date.month
-STOP_DAY = target_date.day
 
+# --- 3. 网络会话设置 ---
 def get_stable_session():
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
@@ -62,46 +64,35 @@ def get_stable_session():
     })
     return session
 
+# --- 4. 存盘逻辑 (精准去重版) ---
 def save_and_update(path, new_lines, db_list, db_path):
-    """
-    终极修复版：确保 #EXTIMG 写入，并彻底解决格式错乱问题
-    """
     items_dict = {}
-
-    # 1. 尝试读取现有文件并解析（重点：通过正则精准切分块）
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
-            # 找到所有的频道块：从 #EXTINF 开始，直到下一个 #EXTINF 或文件末尾
-            # 正则解释：匹配 #EXTINF 及其后的所有内容，直到遇到下一个 #EXTINF
             blocks = re.findall(r'(#EXTINF:.*?)(?=#EXTINF:|$)', content, re.S)
             for block in blocks:
                 clean_block = block.strip()
                 if clean_block:
-                    # 用第一行（标题行）作为 Key，确保唯一性
                     title_line = clean_block.split('\n')[0].strip()
                     items_dict[title_line] = clean_block
 
-    # 2. 将本次新抓取的数据合并进去
     for item in new_lines:
         item = item.strip()
         if item:
             title_line = item.split('\n')[0].strip()
-            # 新抓取的覆盖旧的，保证信息（包括封面）是最新的
             items_dict[title_line] = item
 
-    # 3. 排序并重新写入（干净整洁的格式）
     sorted_keys = sorted(items_dict.keys())
-    
     with open(path, 'w', encoding='utf-8') as f:
-        f.write("#EXTM3U\n") # 只有开头这一行
+        f.write("#EXTM3U\n")
         for k in sorted_keys:
             f.write(items_dict[k] + "\n")
     
-    # 4. 同步更新 JSON
     with open(db_path, 'w', encoding='utf-8') as f:
         json.dump(db_list, f, ensure_ascii=False)
-        
+
+# --- 5. 核心收割逻辑 ---
 def crawl_category(cat, session):
     cat_id, cat_name = cat["id"], cat["name"]
     db_file = f"./{cat_name}.json"
@@ -113,9 +104,8 @@ def crawl_category(cat, session):
     db_set = set(str(i) for i in db)
     
     print(f"\n📂 启动分类: 【{cat_name}】 | 库内: {len(db_set)}")
-
     stats = {"new": 0, "existed": len(db_set)}
-    all_new_entries = []  # <--- 新增：用来收集该分类下所有页面的新资源
+    all_new_entries = []
 
     for p in range(1, 10000):
         url = f"{BASE_URL}/t/{cat_id}-{p}.html"
@@ -124,26 +114,16 @@ def crawl_category(cat, session):
             res.encoding = 'utf-8'
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # 1. 依然先抓 li 列表
             li_list = soup.select('.wall-list li')
             if not li_list: break
 
-            # 2. 【关键新增】检查这一页有没有包含有效视频路径 /p/ 的链接
-            # 如果整页一个真视频都没有（全是广告），直接跳出，不再往后扫
+            # 广告页检测
             has_real_video = any('/p/' in a.get('href', '') for a in soup.select('.wall-list a'))
-            
             if not has_real_video:
                 print(f"🏁 第 {p} 页全是广告，判定为分类终点。")
                 break
             
             print(f"🌐 正在扫描第 {p} 页...")
-            
-            # ... 后续解析逻辑 ...
-            
-            li_list = soup.select('.wall-list li')
-            if not li_list: 
-                print(f"🏁 第 {p} 页无内容，【{cat_name}】收割完毕。")
-                break
 
             for li in li_list:
                 cover_tag = li.select_one('a.card-cover')
@@ -158,22 +138,19 @@ def crawl_category(cat, session):
                 if not title_tag: continue
                 title = title_tag.get_text(strip=True)
                 href = title_tag.get('href', '')
-
                 if not href.startswith('/p/'): continue
 
                 sub_tag = li.select_one('p.sub')
-                if not sub_tag: continue
-                date_match = re.search(r'(\d{2}-\d{2})', sub_tag.get_text())
-                if not date_match: continue
-                date_val = date_match.group(1)
+                date_val = "01-01" # 默认值
+                if sub_tag:
+                    date_match = re.search(r'(\d{2}-\d{2})', sub_tag.get_text())
+                    if date_match: date_val = date_match.group(1)
                 
                 v_id_match = re.search(r'/p/(\d+)', href)
                 if not v_id_match: continue
                 v_id = v_id_match.group(1)
 
-                # --- 全量收割建议关闭 is_old 判断 ---
-                if v_id in db_set:
-                    continue
+                if v_id in db_set: continue
 
                 try:
                     full_link = urllib.parse.urljoin(BASE_URL, href) + "?play=1"
@@ -183,34 +160,39 @@ def crawl_category(cat, session):
                         m3u8 = m3u8_find.group(0).replace('\\', '')
                         if "%3A" in m3u8: m3u8 = urllib.parse.unquote(m3u8)
                         
+                        # --- 修复：正确拼接 item_entry ---
+                        item_entry = f"#EXTINF:-1,{title} [{date_val}]\n"
+                        if cover_url: item_entry += f"#EXTIMG:{cover_url}\n"
+                        item_entry += f"{m3u8}\n"
+                        
                         all_new_entries.append(item_entry)
-                         db.append(v_id)
+                        db.append(v_id)
                         db_set.add(v_id)
                         stats["new"] += 1
                         print(f"  ✅ [捕获] {date_val} | {title[:15]}...")
                         
-                        # 【新增位置】：每捕获 1000 个视频，执行一次物理存盘 + 远程推送
+                        # 每 1000 条强制备份
                         if stats["new"] > 0 and stats["new"] % 1000 == 0:
-                            print(f"📦 达到 1000 条阈值，开启阶段性备份...")
+                            print(f"📦 达到 1000 条阈值，开启分批同步...")
                             save_and_update(save_path, all_new_entries, db, db_file)
-                            all_new_entries = [] # 清空已存列表，防止下次 save_and_update 重复写入
                             git_push_backup(stats["new"])
+                            all_new_entries = [] # 关键：存完清空内存，防止重复
                 except: continue
 
-            # --- 删掉了这里的每页存盘逻辑 ---
-            time.sleep(0.5) # 全量收割可以稍微缩短一点延迟，建议 0.5s-1s
+            time.sleep(0.5)
             
         except Exception as e:
             print(f"  🚨 页面出错: {e}")
             break
 
-    # --- 关键修改：在这里一次性存盘 ---
+    # 循环结束后的最后一次物理存盘
     if all_new_entries:
-        print(f"💾 正在将新增的 {len(all_new_entries)} 条资源写入磁盘...")
+        print(f"💾 正在写入该分类剩余的 {len(all_new_entries)} 条资源...")
         save_and_update(save_path, all_new_entries, db, db_file)
     
     return stats
 
+# --- 6. E2 Bouquet 转换 ---
 def convert_to_e2_bouquets():
     BASE_DIR = './VideoResults'
     OUTPUT_DIR = './E2_Bouquets'
@@ -226,7 +208,6 @@ def convert_to_e2_bouquets():
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # 兼容带海报的 m3u8 解析逻辑
         items = content.split("#EXTINF")
         output_lines = [f"#NAME {cat_name}"]
         sid = 1
@@ -234,7 +215,6 @@ def convert_to_e2_bouquets():
             if not item.strip(): continue
             lines = item.strip().split('\n')
             title = lines[0].split(',')[-1].strip()
-            # 获取最后一行（通常是 URL）
             url = lines[-1].strip()
             if url.startswith('http'):
                 h_sid = hex(sid)[2:].upper()
@@ -245,6 +225,7 @@ def convert_to_e2_bouquets():
         with open(os.path.join(OUTPUT_DIR, f"subbouquet.{cat_name}.tv"), 'w', encoding='utf-8') as f:
             f.write("\n".join(output_lines) + "\n")
 
+# --- 7. 入口 ---
 if __name__ == "__main__":
     start_time = time.time()
     session = get_stable_session()
