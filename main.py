@@ -1,10 +1,26 @@
 import os, re, json, time, requests, urllib.parse
+import subprocess  # 确保开头导入了这个模块
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-def load_config():
+def git_push_backup(count):
+    """阶段性强制备份"""
+    try:
+        # 配置用户信息，防止在 Actions 环境中报错
+        subprocess.run(["git", "config", "--local", "user.email", "action@github.com"], check=True)
+        subprocess.run(["git", "config", "--local", "user.name", "GitHub Action"], check=True)
+        subprocess.run(["git", "add", "."], check=True)
+        # 加入时间戳和数量，让 commit 记录更清晰
+        msg = f"自动备份: 已捕获 {count} 条资源"
+        subprocess.run(["git", "commit", "-m", msg], check=True)
+        subprocess.run(["git", "push"], check=True)
+        print(f"🚀 [同步成功] 已将当前捕获的 {count} 条数据推送至仓库")
+    except Exception as e:
+        print(f"⚠️ [同步跳过] 暂无新内容或推送失败: {e}")
+    
+    def load_config():
     default_config = {
         "BASE_URL": "http://ck0d.cc",
         "CATS": [
@@ -167,15 +183,18 @@ def crawl_category(cat, session):
                         m3u8 = m3u8_find.group(0).replace('\\', '')
                         if "%3A" in m3u8: m3u8 = urllib.parse.unquote(m3u8)
                         
-                        item_entry = f"#EXTINF:-1,{title} [{date_val}]\n"
-                        if cover_url: item_entry += f"#EXTIMG:{cover_url}\n"
-                        item_entry += f"{m3u8}\n"
-                        
-                        all_new_entries.append(item_entry) # <--- 存入大列表
-                        db.append(v_id)
+                        all_new_entries.append(item_entry)
+                         db.append(v_id)
                         db_set.add(v_id)
                         stats["new"] += 1
                         print(f"  ✅ [捕获] {date_val} | {title[:15]}...")
+                        
+                        # 【新增位置】：每捕获 1000 个视频，执行一次物理存盘 + 远程推送
+                        if stats["new"] > 0 and stats["new"] % 1000 == 0:
+                            print(f"📦 达到 1000 条阈值，开启阶段性备份...")
+                            save_and_update(save_path, all_new_entries, db, db_file)
+                            all_new_entries = [] # 清空已存列表，防止下次 save_and_update 重复写入
+                            git_push_backup(stats["new"])
                 except: continue
 
             # --- 删掉了这里的每页存盘逻辑 ---
