@@ -1,17 +1,19 @@
 name: HSCK_Test_Run
 
 on:
-  workflow_dispatch: # 方便你手动点击 "Run workflow" 进行测试
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 必须赋予写权限，否则无法推送结果
+      contents: write
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # 重要：全量拉取历史，否则中途 push 会冲突
 
       - name: 安装 Python 环境
         uses: actions/setup-python@v4
@@ -24,20 +26,24 @@ jobs:
 
       - name: 执行收割脚本
         run: |
+          # 运行过程中，脚本会每 1000 条自动执行 git push
           python main.py
 
-      - name: 强制覆盖并推送结果
+      - name: Final Push changes
+        if: always() # 无论脚本成功、超时还是失败，都执行最后的汇总推送
         run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "github-actions"
+          # 1. 增加 Git 缓冲区
+          git config --global http.postBuffer 524288000
+          git config --global http.lowSpeedLimit 0
+          git config --global http.lowSpeedTime 999999
           
-          # 检查是否有新文件生成
-          git add -A
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
           
-          # 采用那个项目的 Orphan 逻辑：清空历史，只留最新一条
-          git checkout --orphan latest_branch
-          git add -A
-          git commit -m "Auto Update: $(date +'%Y-%m-%d %H:%M') [Test Run]"
-          git branch -D main
-          git branch -m main
-          git push -f origin main
+          # 2. 先拉取远程最新的更改（防止脚本中途推送后，本地落后于远程）
+          git pull origin main --rebase
+
+          # 3. 提交最后剩余的数据
+          git add .
+          git commit -m "Final Update: $(date +'%Y-%m-%d %H:%M') [Remaining Items]" || exit 0
+          git push origin main
