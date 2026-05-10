@@ -1,0 +1,10 @@
+{
+    "BASE_URL": "http://456154.xyz",
+    "CATS": [
+        {
+            "id": "22",
+            "name": "动漫"
+        }
+    ],
+    "STOP_DAYS_AGO": 99999
+}

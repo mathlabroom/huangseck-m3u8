@@ -1,0 +1,43 @@
+name: HSCK_Test_Run
+
+on:
+  workflow_dispatch: # 方便你手动点击 "Run workflow" 进行测试
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 必须赋予写权限，否则无法推送结果
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+
+      - name: 安装 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: 执行收割脚本
+        run: |
+          python main.py
+
+      - name: 强制覆盖并推送结果
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "github-actions"
+          
+          # 检查是否有新文件生成
+          git add -A
+          
+          # 采用那个项目的 Orphan 逻辑：清空历史，只留最新一条
+          git checkout --orphan latest_branch
+          git add -A
+          git commit -m "Auto Update: $(date +'%Y-%m-%d %H:%M') [Test Run]"
+          git branch -D main
+          git branch -m main
+          git push -f origin main
