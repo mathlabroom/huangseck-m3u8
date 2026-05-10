@@ -7,23 +7,32 @@ from urllib3.util.retry import Retry
 
 # --- 1. Git 自动同步函数 ---
 def git_push_backup(count):
-    """阶段性强制备份，确保 17.7 万数据不丢失"""
+    """阶段性强制备份：先落袋为安，再处理冲突"""
     try:
-        # 配置基础信息
+        # 1. 配置基础信息
         subprocess.run(["git", "config", "--local", "user.email", "action@github.com"], check=True)
         subprocess.run(["git", "config", "--local", "user.name", "GitHub Action"], check=True)
         
-        # 拉取远程更新，防止中途推送冲突
-        subprocess.run(["git", "pull", "origin", "main", "--rebase"], check=True)
-        
+        # 2. 先把本地抓到的 1000 条锁死（Add & Commit）
+        # 这样工作区就“干净”了，可以安全执行 pull --rebase
         subprocess.run(["git", "add", "."], check=True)
         msg = f"自动备份: 累计新增 {count} 条资源"
-        subprocess.run(["git", "commit", "-m", msg], check=True)
+        # check=False 是因为如果没有变动 commit 会返回 1，我们不希望它报错
+        subprocess.run(["git", "commit", "-m", msg], check=False)
+        
+        # 3. 这时候再拉取远程更新，解决多人（或多次 Actions）同时运行的冲突
+        print("🔄 正在同步远程仓库状态...")
+        subprocess.run(["git", "pull", "origin", "main", "--rebase"], check=True)
+        
+        # 4. 最后推送到云端
         subprocess.run(["git", "push", "origin", "main"], check=True)
         print(f"🚀 [同步成功] 已成功分批推送 {count} 条数据至仓库")
+        
     except Exception as e:
-        print(f"⚠️ [同步跳过] 可能无新内容或冲突: {e}")
-
+        print(f"⚠️ [同步跳过] 遇到冲突或网络问题: {e}")
+        # 万一 rebase 失败了，尝试强行退出 rebase 状态，防止脚本卡死
+        subprocess.run(["git", "rebase", "--abort"], check=False)
+        
 # --- 2. 配置加载 ---
 def load_config():
     default_config = {
