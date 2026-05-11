@@ -30,9 +30,8 @@ jobs:
           python main.py
 
       - name: Final Push changes
-        if: always() # 无论脚本成功、超时还是失败，都执行最后的汇总推送
+        if: always()
         run: |
-          # 1. 增加 Git 缓冲区
           git config --global http.postBuffer 524288000
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
@@ -40,10 +39,13 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # 2. 先拉取远程最新的更改（防止脚本中途推送后，本地落后于远程）
-          git pull origin main --rebase
-
-          # 3. 提交最后剩余的数据
+          # 【核心修复】：先 add 和 commit，把最后剩下的几百条锁死
+          # 这样工作区就干净了，pull --rebase 就不会报错
           git add .
-          git commit -m "Final Update: $(date +'%Y-%m-%d %H:%M') [Remaining Items]" || exit 0
+          git commit -m "Final cleanup: save remaining items" || echo "No changes to commit"
+
+          # 现在可以安全地拉取并合并了
+          git pull origin main --rebase
+          
+          # 推送全量结果
           git push origin main
