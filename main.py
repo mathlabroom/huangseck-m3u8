@@ -120,17 +120,17 @@ def crawl_category(cat, session):
     stop_date_threshold = (datetime.now() - timedelta(days=stop_days)).strftime("%m-%d")
 
     for p in range(1, 10000):
-        url = f"{BASE_URL}/t/{cat_id}-{p}.html"
+        url = f"{BASE_URL}/vodtype/{cat_id}-{p}.html"
         try:
             res = session.get(url, timeout=15)
             res.encoding = 'utf-8'
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            li_list = soup.select('.wall-list li')
+            li_list = soup.select('.wall-list li') or soup.select('.stui-vodlist li') # 增加新类名兼容
             if not li_list: break
 
-            # 广告页检测
-            has_real_video = any('/p/' in a.get('href', '') for a in soup.select('.wall-list a'))
+            # 广告页检测：判断是否存在真正的播放链接
+            has_real_video = any(re.search(r'/(p|vodplay)/', a.get('href', '')) for a in soup.select('a'))
             if not has_real_video:
                 print(f"🏁 第 {p} 页全是广告，判定为分类终点。")
                 break
@@ -139,7 +139,8 @@ def crawl_category(cat, session):
             found_old_content = False
             
             for li in li_list:
-                cover_tag = li.select_one('a.card-cover')
+                # 封面抓取（优先抓取新版 stui 类名，其次抓取旧版）
+                cover_tag = li.select_one('.stui-vodlist__thumb') or li.select_one('a.card-cover')
                 cover_url = ""
                 if cover_tag:
                     cover_url = cover_tag.get('data-original') or ""
@@ -147,22 +148,26 @@ def crawl_category(cat, session):
                     elif cover_url.startswith('/') and not cover_url.startswith('//'):
                         cover_url = urllib.parse.urljoin(BASE_URL, cover_url)
 
-                title_tag = li.select_one('.card-info .title a')
+                # 标题和链接抓取
+                title_tag = li.select_one('.title a')
                 if not title_tag: continue
                 title = title_tag.get_text(strip=True)
                 href = title_tag.get('href', '')
-                if not href.startswith('/p/'): continue
 
+                # 提取日期
                 sub_tag = li.select_one('p.sub')
-                date_val = "01-01" # 默认值
+                date_val = "01-01"
                 if sub_tag:
-                    date_match = re.search(r'(\d{2}-\d{2})', sub_tag.get_text())
+                    # 匹配末尾的 MM-DD 格式
+                    date_match = re.search(r'(\d{2}-\d{2})$', sub_tag.get_text().strip())
                     if date_match: date_val = date_match.group(1)
                 
-                v_id_match = re.search(r'/p/(\d+)', href)
+                # 提取唯一 ID (兼容 p 和 vodplay)
+                v_id_match = re.search(r'/(?:p|vodplay)/(\d+)', href)
                 if not v_id_match: continue
-                
                 v_id = v_id_match.group(1)
+
+                # 增量判定
                 if p > 3 and date_val < stop_date_threshold:
                     print(f"⏱️ 发现旧资源 ({date_val})，已达到增量截止日期 ({stop_date_threshold})。")
                     found_old_content = True
@@ -171,22 +176,17 @@ def crawl_category(cat, session):
                 if v_id in db_set: continue
 
                 try:
-                    full_link = urllib.parse.urljoin(BASE_URL, href) + "?play=1"
+                    full_link = urllib.parse.urljoin(BASE_URL, href)
+                    if '/p/' in href: full_link += "?play=1"
+                    
                     p_res = session.get(full_link, timeout=10)
                     m3u8_find = re.search(r'https?[:\\]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
                     if m3u8_find:
                         m3u8 = m3u8_find.group(0).replace('\\', '')
                         if "%3A" in m3u8: m3u8 = urllib.parse.unquote(m3u8)
                         
-                        # --- 修改这里的拼接逻辑 ---
-                        # 逻辑：如果存在封面图，则注入 tvg-logo 属性；否则保持原样
-                        if cover_url:
-                            item_entry = f'#EXTINF:-1 tvg-logo="{cover_url}",{title} [{date_val}]\n'
-                        else:
-                            item_entry = f'#EXTINF:-1,{title} [{date_val}]\n'
-        
-                        item_entry += f"{m3u8}\n"
-                        # --- 修改结束 ---
+                        # 写入符合 IPTVnator 标准的海报格式
+                        item_entry = f'#EXTINF:-1 tvg-logo="{cover_url}",{title} [{date_val}]\n{m3u8}\n'
                         
                         all_new_entries.append(item_entry)
                         db.append(v_id)
@@ -194,15 +194,12 @@ def crawl_category(cat, session):
                         stats["new"] += 1
                         print(f"  ✅ [捕获] {date_val} | {title[:15]}...")
                         
-                        # 每 1000 条强制备份
                         if stats["new"] > 0 and stats["new"] % 1000 == 0:
-                            print(f"📦 达到 1000 条阈值，开启分批同步...")
                             save_and_update(save_path, all_new_entries, db, db_file)
                             git_push_backup(stats["new"])
-                            all_new_entries = [] # 关键：存完清空内存，防止重复
+                            all_new_entries = []
                 except: continue
-            if found_old_content:
-                break # 彻底退出 range(1, 10000) 循环，切换到下一个分类
+            if found_old_content: break
             time.sleep(0.5)
             
         except Exception as e:
