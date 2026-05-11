@@ -115,6 +115,9 @@ def crawl_category(cat, session):
     print(f"\n📂 启动分类: 【{cat_name}】 | 库内: {len(db_set)}")
     stats = {"new": 0, "existed": len(db_set)}
     all_new_entries = []
+    stop_days = config.get("STOP_DAYS_AGO", 1)
+    # 计算 N 天前的日期字符串 (格式 MM-DD)
+    stop_date_threshold = (datetime.now() - timedelta(days=stop_days)).strftime("%m-%d")
 
     for p in range(1, 10000):
         url = f"{BASE_URL}/t/{cat_id}-{p}.html"
@@ -133,7 +136,8 @@ def crawl_category(cat, session):
                 break
             
             print(f"🌐 正在扫描第 {p} 页...")
-
+            found_old_content = False
+            
             for li in li_list:
                 cover_tag = li.select_one('a.card-cover')
                 cover_url = ""
@@ -157,8 +161,13 @@ def crawl_category(cat, session):
                 
                 v_id_match = re.search(r'/p/(\d+)', href)
                 if not v_id_match: continue
+                
                 v_id = v_id_match.group(1)
-
+                if p > 3 and date_val < stop_date_threshold:
+                    print(f"⏱️ 发现旧资源 ({date_val})，已达到增量截止日期 ({stop_date_threshold})。")
+                    found_old_content = True
+                    break
+                
                 if v_id in db_set: continue
 
                 try:
@@ -187,7 +196,8 @@ def crawl_category(cat, session):
                             git_push_backup(stats["new"])
                             all_new_entries = [] # 关键：存完清空内存，防止重复
                 except: continue
-
+            if found_old_content:
+                break # 彻底退出 range(1, 10000) 循环，切换到下一个分类
             time.sleep(0.5)
             
         except Exception as e:
