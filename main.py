@@ -178,10 +178,15 @@ def crawl_category(cat, session):
                         m3u8 = m3u8_find.group(0).replace('\\', '')
                         if "%3A" in m3u8: m3u8 = urllib.parse.unquote(m3u8)
                         
-                        # --- 修复：正确拼接 item_entry ---
-                        item_entry = f"#EXTINF:-1,{title} [{date_val}]\n"
-                        if cover_url: item_entry += f"#EXTIMG:{cover_url}\n"
+                        # --- 修改这里的拼接逻辑 ---
+                        # 逻辑：如果存在封面图，则注入 tvg-logo 属性；否则保持原样
+                        if cover_url:
+                            item_entry = f'#EXTINF:-1 tvg-logo="{cover_url}",{title} [{date_val}]\n'
+                        else:
+                            item_entry = f'#EXTINF:-1,{title} [{date_val}]\n'
+        
                         item_entry += f"{m3u8}\n"
+                        # --- 修改结束 ---
                         
                         all_new_entries.append(item_entry)
                         db.append(v_id)
