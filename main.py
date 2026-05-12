@@ -150,12 +150,30 @@ def crawl_category(cat, session):
                     if any(x in href for x in ['javascript', 'about:', 'index.php']):
                         continue
 
-                    # --- 3. 自动识别日期 ---
+                    # --- 3. 自动识别日期 (防混淆增强版) ---
                     date_val = "01-01"
-                    li_text = li.get_text(strip=True)
-                    date_match = re.search(r'(\d{2}-\d{2})', li_text)
-                    if date_match:
-                        date_val = date_match.group(1)
+                
+                    # 【关键】不再在整个 li 里盲搜，而是先精准定位到存放日期的 sub 栏目
+                    sub_tag = li.find('p', class_='sub')
+                    if sub_tag:
+                        # 仅在 sub 标签的文字里找日期，这就过滤掉了标题里的 2022-07-10
+                        sub_text = sub_tag.get_text(strip=True)
+                        # 匹配末尾的 MM-DD
+                        date_matches = re.findall(r'(\d{2}-\d{2})', sub_text)
+                        if date_matches:
+                            # 即使 sub 里有多个符合条件的，日期通常也是最后一个
+                            date_val = date_matches[-1]
+                
+                    # 如果没找到 sub 标签，作为保底，我们搜寻 li 文本中“最后”出现的一个日期格式
+                    if date_val == "01-01":
+                        li_text = li.get_text(strip=True)
+                        all_dates = re.findall(r'(\d{2}-\d{2})', li_text)
+                        if all_dates:
+                            # 取最后一个，避开标题里可能出现的日期
+                            date_val = all_dates[-1]
+
+                    # 打印调试，看看现在识别对了吗
+                    # print(f"🔍 标题: {title[:15]}... | 判定日期: {date_val}")
 
                     # --- 4. 截止判定 ---
                     if p > 3 and date_val != "01-01":
