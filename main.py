@@ -141,57 +141,70 @@ def crawl_category(cat, session):
             found_old_content = False
             
             for li in li_list:
-                # --- 提取图片 ---
-                # 源码中类名是 stui-vodlist__thumb，图片在 data-original 属性里
-                cover_tag = li.select_one('.stui-vodlist__thumb')
-                cover_url = ""
-                if cover_tag:
-                    cover_url = cover_tag.get('data-original') or ""
-                    if cover_url.startswith('//'): cover_url = 'https:' + cover_url
-                    elif cover_url.startswith('/') and not cover_url.startswith('//'):
-                        cover_url = urllib.parse.urljoin(BASE_URL, cover_url)
-
-                # --- 提取标题和链接 ---
+                # 1. 基础信息提取
                 title_tag = li.select_one('.title a')
                 if not title_tag: continue
+                
                 title = title_tag.get_text(strip=True)
                 href = title_tag.get('href', '')
-                
-                # --- 提取日期 ---
-                # 源码中日期 05-12 在 p.sub 标签的最后
+
+                # --- 【修正】逻辑 A：先过滤广告，再谈日期 ---
+                # 只有包含 /vodplay/ 的才是我们要的
+                if '/vodplay/' not in href:
+                    continue
+
+                # --- 【修正】逻辑 B：解析真实日期 ---
+                date_val = "01-01" 
                 sub_tag = li.select_one('p.sub')
-                date_val = "01-01"
                 if sub_tag:
-                    # 匹配标签内类似 05-12 的日期格式
-                    date_match = re.search(r'(\d{2}-\d{2})', sub_tag.get_text())
-                    if date_match: date_val = date_match.group(1)
+                    sub_text = sub_tag.get_text(strip=True)
+                    date_match = re.search(r'(\d{2}-\d{2})', sub_text)
+                    if date_match:
+                        date_val = date_match.group(1)
+
+                # --- 【修正】逻辑 C：增量截止判定 ---
+                # 翻页超过 3 页后，如果遇到比阈值旧的日期，则停止该分类
+                if p > 3 and date_val != "01-01":
+                    if date_val < stop_date_threshold:
+                        print(f"⏱️ 达到截止日期 ({date_val} < {stop_date_threshold})，停止扫描。")
+                        found_old_content = True
+                        break
                 
-                # --- 提取 ID ---
-                # 匹配 /vodplay/179912-1-1.html 中的 179912
+                # --- 4. 去重判定 ---
                 v_id_match = re.search(r'/vodplay/(\d+)', href)
                 if not v_id_match: continue
                 v_id = v_id_match.group(1)
-
-                # --- 增量逻辑判定 ---
-                if p > 3 and date_val < stop_date_threshold:
-                    print(f"⏱️ 发现旧资源 ({date_val})，达到截止日期 ({stop_date_threshold})。")
-                    found_old_content = True
-                    break
                 
                 if v_id in db_set: continue
 
+                # --- 5. 抓取播放链接 (强制播放页模式) ---
                 try:
-                    # 现在的详情页就是播放页，直接访问即可
+                    # 拼接播放页链接
                     full_link = urllib.parse.urljoin(BASE_URL, href)
-                    p_res = session.get(full_link, timeout=10)
-                    
-                    # 这里的正则提取 .m3u8 逻辑依然有效
-                    m3u8_find = re.search(r'https?[:\\]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
+                    if "?" not in full_link:
+                        full_link += "?play=1"
+                    else:
+                        full_link += "&play=1"
+
+                    p_res = session.get(full_link, timeout=12)
+                    p_text = p_res.text
+
+                    # 核心：匹配转义后的 m3u8 地址 (处理 \/ 和 %3A)
+                    m3u8_find = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_text, re.I)
+
                     if m3u8_find:
-                        m3u8 = m3u8_find.group(0).replace('\\', '')
-                        if "%3A" in m3u8: m3u8 = urllib.parse.unquote(m3u8)
+                        # 1. 还原转义斜杠 \/ -> /
+                        m3u8 = m3u8_find.group(0).replace('\\/', '/').replace('\\', '')
                         
-                        # 拼接为你刚才调好的标准 tvg-logo 格式
+                        # 2. 还原 URL 编码 %3A -> :
+                        if "%" in m3u8:
+                            m3u8 = urllib.parse.unquote(m3u8)
+                        
+                        # 3. 提取封面图 (从列表页的 li 标签提取)
+                        img_tag = li.select_one('.lazyload')
+                        cover_url = img_tag.get('data-original', '') if img_tag else ""
+
+                        # 4. 格式化写入
                         item_entry = f'#EXTINF:-1 tvg-logo="{cover_url}",{title} [{date_val}]\n{m3u8}\n'
                         
                         all_new_entries.append(item_entry)
@@ -200,11 +213,16 @@ def crawl_category(cat, session):
                         stats["new"] += 1
                         print(f"  ✅ [捕获] {date_val} | {title[:15]}...")
                         
+                        # 5. 每 1000 条自动备份到 Git
                         if stats["new"] > 0 and stats["new"] % 1000 == 0:
+                            print(f"📦 累计 1000 条，正在同步仓库...")
                             save_and_update(save_path, all_new_entries, db, db_file)
                             git_push_backup(stats["new"])
-                            all_new_entries = []
-                except: continue
+                            all_new_entries = [] 
+                except Exception as e:
+                    continue
+
+            # li 循环结束，判断是否需要因为日期旧而切换分类
             if found_old_content: break
             time.sleep(0.5)
             
