@@ -126,21 +126,24 @@ def crawl_category(cat, session):
             res.encoding = 'utf-8'
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            li_list = soup.select('.wall-list li') or soup.select('.stui-vodlist li') # 增加新类名兼容
+            # 1. 查找列表容器 (针对 Stui 模板优化)
+            li_list = soup.select('.stui-vodlist li')
             if not li_list: break
 
-            # 广告页检测：判断是否存在真正的播放链接
-            has_real_video = any(re.search(r'/(p|vodplay)/', a.get('href', '')) for a in soup.select('a'))
+            # 2. 广告过滤逻辑
+            # 现在的链接是 /vodplay/，所以我们检查是否存在正常的播放地址
+            has_real_video = any('/vodplay/' in a.get('href', '') for a in soup.select('.stui-vodlist a'))
             if not has_real_video:
-                print(f"🏁 第 {p} 页全是广告，判定为分类终点。")
+                print(f"🏁 第 {p} 页全是广告/非视频内容。")
                 break
             
             print(f"🌐 正在扫描第 {p} 页...")
             found_old_content = False
             
             for li in li_list:
-                # 封面抓取（优先抓取新版 stui 类名，其次抓取旧版）
-                cover_tag = li.select_one('.stui-vodlist__thumb') or li.select_one('a.card-cover')
+                # --- 提取图片 ---
+                # 源码中类名是 stui-vodlist__thumb，图片在 data-original 属性里
+                cover_tag = li.select_one('.stui-vodlist__thumb')
                 cover_url = ""
                 if cover_tag:
                     cover_url = cover_tag.get('data-original') or ""
@@ -148,44 +151,47 @@ def crawl_category(cat, session):
                     elif cover_url.startswith('/') and not cover_url.startswith('//'):
                         cover_url = urllib.parse.urljoin(BASE_URL, cover_url)
 
-                # 标题和链接抓取
+                # --- 提取标题和链接 ---
                 title_tag = li.select_one('.title a')
                 if not title_tag: continue
                 title = title_tag.get_text(strip=True)
                 href = title_tag.get('href', '')
-
-                # 提取日期
+                
+                # --- 提取日期 ---
+                # 源码中日期 05-12 在 p.sub 标签的最后
                 sub_tag = li.select_one('p.sub')
                 date_val = "01-01"
                 if sub_tag:
-                    # 匹配末尾的 MM-DD 格式
-                    date_match = re.search(r'(\d{2}-\d{2})$', sub_tag.get_text().strip())
+                    # 匹配标签内类似 05-12 的日期格式
+                    date_match = re.search(r'(\d{2}-\d{2})', sub_tag.get_text())
                     if date_match: date_val = date_match.group(1)
                 
-                # 提取唯一 ID (兼容 p 和 vodplay)
-                v_id_match = re.search(r'/(?:p|vodplay)/(\d+)', href)
+                # --- 提取 ID ---
+                # 匹配 /vodplay/179912-1-1.html 中的 179912
+                v_id_match = re.search(r'/vodplay/(\d+)', href)
                 if not v_id_match: continue
                 v_id = v_id_match.group(1)
 
-                # 增量判定
+                # --- 增量逻辑判定 ---
                 if p > 3 and date_val < stop_date_threshold:
-                    print(f"⏱️ 发现旧资源 ({date_val})，已达到增量截止日期 ({stop_date_threshold})。")
+                    print(f"⏱️ 发现旧资源 ({date_val})，达到截止日期 ({stop_date_threshold})。")
                     found_old_content = True
                     break
                 
                 if v_id in db_set: continue
 
                 try:
+                    # 现在的详情页就是播放页，直接访问即可
                     full_link = urllib.parse.urljoin(BASE_URL, href)
-                    if '/p/' in href: full_link += "?play=1"
-                    
                     p_res = session.get(full_link, timeout=10)
+                    
+                    # 这里的正则提取 .m3u8 逻辑依然有效
                     m3u8_find = re.search(r'https?[:\\]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
                     if m3u8_find:
                         m3u8 = m3u8_find.group(0).replace('\\', '')
                         if "%3A" in m3u8: m3u8 = urllib.parse.unquote(m3u8)
                         
-                        # 写入符合 IPTVnator 标准的海报格式
+                        # 拼接为你刚才调好的标准 tvg-logo 格式
                         item_entry = f'#EXTINF:-1 tvg-logo="{cover_url}",{title} [{date_val}]\n{m3u8}\n'
                         
                         all_new_entries.append(item_entry)
