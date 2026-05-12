@@ -140,78 +140,82 @@ def crawl_category(cat, session):
             print(f"🌐 正在扫描第 {p} 页...")
             found_old_content = False
             
-            for li in li_list:
-                # 1. 基础信息提取
-                title_tag = li.select_one('.title a')
-                if not title_tag: continue
+            # --- 1. 自动定位列表区域 ---
+            # 不再死磕具体的 class，找所有包含 <a> 标签的 <li> 
+            # 这种排比结构通常就是视频列表
+            items = soup.find_all('li')
+            
+            for li in items:
+                # --- 2. 特征嗅探：寻找“真视频”链接 ---
+                # 特征 1：a 标签必须有 title 属性（真视频为了 SEO 必带）
+                # 特征 2：没有 target="blank"（真视频通常站内跳转，广告必跳出）
+                title_tag = li.find('a', attrs={"title": True})
                 
-                title = title_tag.get_text(strip=True)
+                # 如果这个 a 标签带了 target="blank" 或者根本没有 title，大概率是广告
+                if not title_tag or title_tag.get('target') == 'blank':
+                    continue
+                
+                title = title_tag.get('title').strip()
                 href = title_tag.get('href', '')
-
-                # --- 【修正】逻辑 A：先过滤广告，再谈日期 ---
-                # 只有包含 /vodplay/ 的才是我们要的
-                if '/vodplay/' not in href:
+                
+                # 排除一些常见的系统链接
+                if any(x in href for x in ['javascript', 'about:', 'index.php']):
                     continue
 
-                # --- 【修正】逻辑 B：解析真实日期 ---
-                date_val = "01-01" 
-                sub_tag = li.select_one('p.sub')
-                if sub_tag:
-                    sub_text = sub_tag.get_text(strip=True)
-                    date_match = re.search(r'(\d{2}-\d{2})', sub_text)
-                    if date_match:
-                        date_val = date_match.group(1)
+                # --- 3. 自动识别日期 ---
+                # 不管日期在哪个 <span> 或 <p> 里，直接在当前 li 容器里搜数字格式
+                date_val = "01-01"
+                li_text = li.get_text(strip=True)
+                # 匹配 MM-DD 格式
+                date_match = re.search(r'(\d{2}-\d{2})', li_text)
+                if date_match:
+                    date_val = date_match.group(1)
 
-                # --- 【修正】逻辑 C：增量截止判定 ---
-                # 翻页超过 3 页后，如果遇到比阈值旧的日期，则停止该分类
+                # --- 4. 截止判定 ---
+                # 依然保留翻页保护逻辑
                 if p > 3 and date_val != "01-01":
                     if date_val < stop_date_threshold:
-                        print(f"⏱️ 达到截止日期 ({date_val} < {stop_date_threshold})，停止扫描。")
+                        print(f"⏱️ 探测到旧日期 {date_val}，收割完成。")
                         found_old_content = True
                         break
-                
-                # --- 4. 去重判定 ---
-                v_id_match = re.search(r'/vodplay/(\d+)', href)
+
+                # --- 5. 去重判定 ---
+                # 既然路径会变，我们直接拿 href 里的数字 ID 作为唯一识别码
+                v_id_match = re.search(r'(\d+)', href)
                 if not v_id_match: continue
                 v_id = v_id_match.group(1)
-                
-                if v_id in db_set: continue
 
-                # --- 5. 抓取播放链接 (强制播放页模式) ---
+                if v_id in db_set:
+                    continue
+
+                # --- 6. 捕获 M3U8 (带 play 参数) ---
                 try:
-                    # 拼接播放页链接
                     full_link = urllib.parse.urljoin(BASE_URL, href)
-                    if "?" not in full_link:
-                        full_link += "?play=1"
-                    else:
-                        full_link += "&play=1"
+                    # 自动处理带不带问号的参数拼接
+                    play_link = full_link + ("&" if "?" in full_link else "?") + "play=1"
+                    
+                    p_res = session.get(play_link, timeout=12)
+                    # 匹配 JS 变量里的 m3u8，并处理转义斜杠
+                    m3u8_match = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
 
-                    p_res = session.get(full_link, timeout=12)
-                    p_text = p_res.text
-
-                    # 核心：匹配转义后的 m3u8 地址 (处理 \/ 和 %3A)
-                    m3u8_find = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_text, re.I)
-
-                    if m3u8_find:
-                        # 1. 还原转义斜杠 \/ -> /
-                        m3u8 = m3u8_find.group(0).replace('\\/', '/').replace('\\', '')
-                        
-                        # 2. 还原 URL 编码 %3A -> :
+                    if m3u8_match:
+                        m3u8 = m3u8_match.group(0).replace('\\/', '/').replace('\\', '')
                         if "%" in m3u8:
                             m3u8 = urllib.parse.unquote(m3u8)
-                        
-                        # 3. 提取封面图 (从列表页的 li 标签提取)
-                        img_tag = li.select_one('.lazyload')
-                        cover_url = img_tag.get('data-original', '') if img_tag else ""
 
-                        # 4. 格式化写入
+                        # 获取封面 (找第一个带有图片路径的标签)
+                        img_tag = li.find('img') or li.find(attrs={"data-original": True})
+                        cover_url = ""
+                        if img_tag:
+                            cover_url = img_tag.get('data-original') or img_tag.get('src') or ""
+
+                        # 写入逻辑保持不变
                         item_entry = f'#EXTINF:-1 tvg-logo="{cover_url}",{title} [{date_val}]\n{m3u8}\n'
-                        
                         all_new_entries.append(item_entry)
                         db.append(v_id)
                         db_set.add(v_id)
                         stats["new"] += 1
-                        print(f"  ✅ [捕获] {date_val} | {title[:15]}...")
+                        print(f"  ✅ [嗅探成功] {date_val} | {title[:15]}...")
                         
                         # 5. 每 1000 条自动备份到 Git
                         if stats["new"] > 0 and stats["new"] % 1000 == 0:
