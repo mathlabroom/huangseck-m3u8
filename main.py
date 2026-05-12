@@ -116,128 +116,112 @@ def crawl_category(cat, session):
     stats = {"new": 0, "existed": len(db_set)}
     all_new_entries = []
     stop_days = config.get("STOP_DAYS_AGO", 1)
-    # 计算 N 天前的日期字符串 (格式 MM-DD)
     stop_date_threshold = (datetime.now() - timedelta(days=stop_days)).strftime("%m-%d")
 
-    for p in range(1, 10000):
-        url = f"{BASE_URL}/vodtype/{cat_id}-{p}.html"
-        try:
-            res = session.get(url, timeout=15)
-            res.encoding = 'utf-8'
-            soup = BeautifulSoup(res.text, 'html.parser')
-            
-            # 1. 查找列表容器 (针对 Stui 模板优化)
-            li_list = soup.select('.stui-vodlist li')
-            if not li_list: break
-
-            # 2. 广告过滤逻辑
-            # 现在的链接是 /vodplay/，所以我们检查是否存在正常的播放地址
-            has_real_video = any('/vodplay/' in a.get('href', '') for a in soup.select('.stui-vodlist a'))
-            if not has_real_video:
-                print(f"🏁 第 {p} 页全是广告/非视频内容。")
-                break
-            
-            print(f"🌐 正在扫描第 {p} 页...")
-            found_old_content = False
-            
-            # --- 1. 自动定位列表区域 ---
-            # 不再死磕具体的 class，找所有包含 <a> 标签的 <li> 
-            # 这种排比结构通常就是视频列表
-            items = soup.find_all('li')
-            
-            for li in items:
-                # --- 2. 特征嗅探：寻找“真视频”链接 ---
-                # 特征 1：a 标签必须有 title 属性（真视频为了 SEO 必带）
-                # 特征 2：没有 target="blank"（真视频通常站内跳转，广告必跳出）
-                title_tag = li.find('a', attrs={"title": True})
+    try:
+        for p in range(1, 10000):
+            url = f"{BASE_URL}/vodtype/{cat_id}-{p}.html"
+            try:
+                res = session.get(url, timeout=15)
+                res.encoding = 'utf-8'
+                soup = BeautifulSoup(res.text, 'html.parser')
                 
-                # 如果这个 a 标签带了 target="blank" 或者根本没有 title，大概率是广告
-                if not title_tag or title_tag.get('target') == 'blank':
-                    continue
+                # 检查列表是否存在
+                items = soup.find_all('li')
+                if not items: break
+
+                # 快速判断是否有真视频 (复用你的逻辑)
+                has_real_video = any('/vodplay/' in a.get('href', '') for a in soup.find_all('a'))
+                if not has_real_video and p > 1: # 第一页如果有广告很正常，后面页全是广告就停
+                    print(f"🏁 第 {p} 页全是广告/非视频内容。")
+                    break
                 
-                title = title_tag.get('title').strip()
-                href = title_tag.get('href', '')
+                print(f"🌐 正在扫描第 {p} 页...")
+                found_old_content = False
                 
-                # 排除一些常见的系统链接
-                if any(x in href for x in ['javascript', 'about:', 'index.php']):
-                    continue
-
-                # --- 3. 自动识别日期 ---
-                # 不管日期在哪个 <span> 或 <p> 里，直接在当前 li 容器里搜数字格式
-                date_val = "01-01"
-                li_text = li.get_text(strip=True)
-                # 匹配 MM-DD 格式
-                date_match = re.search(r'(\d{2}-\d{2})', li_text)
-                if date_match:
-                    date_val = date_match.group(1)
-
-                # --- 4. 截止判定 ---
-                # 依然保留翻页保护逻辑
-                if p > 3 and date_val != "01-01":
-                    if date_val < stop_date_threshold:
-                        print(f"⏱️ 探测到旧日期 {date_val}，收割完成。")
-                        found_old_content = True
-                        break
-
-                # --- 5. 去重判定 ---
-                # 既然路径会变，我们直接拿 href 里的数字 ID 作为唯一识别码
-                v_id_match = re.search(r'(\d+)', href)
-                if not v_id_match: continue
-                v_id = v_id_match.group(1)
-
-                if v_id in db_set:
-                    continue
-
-                # --- 6. 捕获 M3U8 (带 play 参数) ---
-                try:
-                    full_link = urllib.parse.urljoin(BASE_URL, href)
-                    # 自动处理带不带问号的参数拼接
-                    play_link = full_link + ("&" if "?" in full_link else "?") + "play=1"
+                for li in items:
+                    # --- 2. 特征嗅探 ---
+                    title_tag = li.find('a', attrs={"title": True})
+                    if not title_tag or title_tag.get('target') == 'blank':
+                        continue
                     
-                    p_res = session.get(play_link, timeout=12)
-                    # 匹配 JS 变量里的 m3u8，并处理转义斜杠
-                    m3u8_match = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
+                    title = title_tag.get('title').strip()
+                    href = title_tag.get('href', '')
+                    if any(x in href for x in ['javascript', 'about:', 'index.php']):
+                        continue
 
-                    if m3u8_match:
-                        m3u8 = m3u8_match.group(0).replace('\\/', '/').replace('\\', '')
-                        if "%" in m3u8:
-                            m3u8 = urllib.parse.unquote(m3u8)
+                    # --- 3. 自动识别日期 ---
+                    date_val = "01-01"
+                    li_text = li.get_text(strip=True)
+                    date_match = re.search(r'(\d{2}-\d{2})', li_text)
+                    if date_match:
+                        date_val = date_match.group(1)
 
-                        # 获取封面 (找第一个带有图片路径的标签)
-                        img_tag = li.find('img') or li.find(attrs={"data-original": True})
-                        cover_url = ""
-                        if img_tag:
-                            cover_url = img_tag.get('data-original') or img_tag.get('src') or ""
+                    # --- 4. 截止判定 ---
+                    if p > 3 and date_val != "01-01":
+                        if date_val < stop_date_threshold:
+                            print(f"⏱️ 探测到旧日期 {date_val}，收割完成。")
+                            found_old_content = True
+                            break
 
-                        # 写入逻辑保持不变
-                        item_entry = f'#EXTINF:-1 tvg-logo="{cover_url}",{title} [{date_val}]\n{m3u8}\n'
-                        all_new_entries.append(item_entry)
-                        db.append(v_id)
-                        db_set.add(v_id)
-                        stats["new"] += 1
-                        print(f"  ✅ [嗅探成功] {date_val} | {title[:15]}...")
+                    # --- 5. 去重判定 ---
+                    v_id_match = re.search(r'(\d+)', href)
+                    if not v_id_match: continue
+                    v_id = v_id_match.group(1)
+                    if v_id in db_set:
+                        continue
+
+                    # --- 6. 捕获 M3U8 (带 play 参数) ---
+                    try:
+                        full_link = urllib.parse.urljoin(BASE_URL, href)
+                        play_link = full_link + ("&" if "?" in full_link else "?") + "play=1"
                         
-                        # 5. 每 1000 条自动备份到 Git
-                        if stats["new"] > 0 and stats["new"] % 1000 == 0:
-                            print(f"📦 累计 1000 条，正在同步仓库...")
-                            save_and_update(save_path, all_new_entries, db, db_file)
-                            git_push_backup(stats["new"])
-                            all_new_entries = [] 
-                except Exception as e:
-                    continue
+                        p_res = session.get(play_link, timeout=12)
+                        m3u8_match = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
 
-            # li 循环结束，判断是否需要因为日期旧而切换分类
-            if found_old_content: break
-            time.sleep(0.5)
-            
-        except Exception as e:
-            print(f"  🚨 页面出错: {e}")
-            break
+                        if m3u8_match:
+                            m3u8 = m3u8_match.group(0).replace('\\/', '/').replace('\\', '')
+                            if "%" in m3u8:
+                                m3u8 = urllib.parse.unquote(m3u8)
 
-    # 循环结束后的最后一次物理存盘
-    if all_new_entries:
-        print(f"💾 正在写入该分类剩余的 {len(all_new_entries)} 条资源...")
-        save_and_update(save_path, all_new_entries, db, db_file)
+                            img_tag = li.find('img') or li.find(attrs={"data-original": True})
+                            cover_url = ""
+                            if img_tag:
+                                cover_url = img_tag.get('data-original') or img_tag.get('src') or ""
+
+                            item_entry = f'#EXTINF:-1 tvg-logo="{cover_url}",{title} [{date_val}]\n{m3u8}\n'
+                            all_new_entries.append(item_entry)
+                            db.append(v_id)
+                            db_set.add(v_id)
+                            stats["new"] += 1
+                            print(f"  ✅ [嗅探成功] {date_val} | {title[:15]}...")
+                            
+                            if stats["new"] > 0 and stats["new"] % 1000 == 0:
+                                print(f"📦 累计 1000 条，同步中...")
+                                save_and_update(save_path, all_new_entries, db, db_file)
+                                git_push_backup(stats["new"])
+                                all_new_entries = [] 
+                    except Exception:
+                        continue
+
+                if found_old_content: break
+                time.sleep(0.5)
+
+            except Exception as e:
+                print(f"  🚨 页面出错: {e}")
+                break
+
+    except KeyboardInterrupt:
+        # --- 核心改进：捕获手动中断 ---
+        print("\n\n🛑 检测到手动中断（Ctrl+C）！正在准备紧急存盘...")
+    
+    finally:
+        # --- 无论正常结束还是中断，都会执行这里 ---
+        if all_new_entries:
+            print(f"💾 正在写入缓存中的 {len(all_new_entries)} 条资源至硬盘...")
+            save_and_update(save_path, all_new_entries, db, db_file)
+        else:
+            print("ℹ️ 无新数据需要保存。")
     
     return stats
 
