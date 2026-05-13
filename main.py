@@ -66,6 +66,30 @@ def get_valid_base_url(current_url):
     
     return current_url
 
+def get_route_path(base_url, session):
+    """
+    直接从首页源码解析出当前的分类路由格式
+    """
+    try:
+        # 1. 访问首页
+        res = session.get(base_url, timeout=10, verify=False)
+        res.encoding = 'utf-8'
+        
+        # 2. 正则匹配：寻找包含 .html 的链接前缀
+        # 这里的正则专门抓取类似 /vodtype/ 或 /p/ 这种出现在数字前面的字符
+        match = re.search(r'href="(/[a-z0-9]+/)\d+\.html"', res.text)
+        
+        if match:
+            path = match.group(1)
+            print(f"🎯 自动识别路由成功: {path}")
+            return path
+        else:
+            print("⚠️ 首页未发现标准路由，尝试使用默认值 /vodtype/")
+            return "/vodtype/"
+    except Exception as e:
+        print(f"❌ 解析首页失败: {e}")
+        return "/vodtype/"
+        
 # --- 3. 配置加载与更新 ---
 def load_and_fix_config():
     config_path = "config.json"
@@ -97,10 +121,6 @@ def load_and_fix_config():
     
     return current_config
 
-# 初始化配置
-config = load_and_fix_config()
-BASE_URL = config["BASE_URL"]
-CATS = config["CATS"]
 
 # --- 4. 网络会话设置 ---
 def get_stable_session():
@@ -171,7 +191,11 @@ def crawl_category(cat, session):
 
     try:
         for p in range(1, 10000):
-            url = f"{BASE_URL}/vodtype/{cat_id}-{p}.html"
+                # --- 核心改动处 ---
+            # 删掉硬编码的 /vodtype/，换成识别出来的 ROUTE_PATH
+            # 注意：如果 ROUTE_PATH 是 "/vodtype/"，生成的 url 就是 .../vodtype/2-1.html
+            url = f"{BASE_URL}{ROUTE_PATH}{cat_id}-{p}.html"
+        
             try:
                 res = session.get(url, timeout=15)
                 res.encoding = 'utf-8'
@@ -330,21 +354,53 @@ def convert_to_e2_bouquets():
 # --- 7. 入口 ---
 if __name__ == "__main__":
     start_time = time.time()
+    
+    # 1. 先加载配置（此时内部会完成域名验证）
+    config = load_and_fix_config() 
+    
+    # 2. 【关键】立即给全局变量 BASE_URL 赋值
+    # 这样 get_stable_session 里的 "Referer": BASE_URL 才能找到值
+    BASE_URL = config["BASE_URL"] 
+    
+    # 3. 再初始化会话
     session = get_stable_session()
+    
+    # 4. 获取路由路径
+    ROUTE_PATH = get_route_path(BASE_URL, session)
+    
     report = []
     
+    print(f"🚀 启动收割程序 | 目标域名: {BASE_URL} | 路由模式: {ROUTE_PATH}")
+    
     try:
-        for cat in CATS:
+        # 3. 遍历 config.json 中的分类
+        for cat in config.get("CATS", []):
             try:
+                # 执行抓取
                 res = crawl_category(cat, session)
                 report.append({"name": cat["name"], **res})
             except KeyboardInterrupt:
-                print(f"\n⚠️ 手动跳过 {cat['name']}")
-                report.append({"name": cat["name"], "new": 0, "existed": "N/A"})
+                print(f"\n⚠️ 手动跳过分类: {cat['name']}")
                 continue
+            except Exception as e:
+                print(f"❌ 分类 {cat['name']} 运行出错: {e}")
+                continue
+                
     finally:
-        print(f"\n{'='*30}\n收割总结\n{'='*30}")
+        # 4. 总结与转换
+        print(f"\n{'='*30}\n收割总结 (今日日期: {datetime.now().strftime('%m-%d')})\n{'='*30}")
+        total_new = 0
         for r in report:
-            print(f"{r['name']}: 新增 {r['new']}")
+            new_count = r.get('new', 0)
+            total_new += new_count
+            print(f"  {r['name']}: 新增 {new_count}")
+        
+        # 5. 阶段性转换 E2 格式
         convert_to_e2_bouquets()
-        print(f"\n✅ 完成! 耗时: {time.time()-start_time:.1f}s")
+        
+        # 6. 如果今天有新货，最后执行一次 Git 推送
+        if total_new > 0:
+            print(f"📦 今日共收获 {total_new} 条新资源，准备同步至远程仓库...")
+            git_push_backup(total_new)
+            
+        print(f"\n✅ 任务结束! 总耗时: {time.time()-start_time:.1f}s")
