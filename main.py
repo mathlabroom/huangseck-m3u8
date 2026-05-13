@@ -400,7 +400,11 @@ if __name__ == "__main__":
         
         # 6. 如果今天有新货，最后执行一次 Git 推送
         if total_new > 0:
-            print(f"📦 今日共收获 {total_new} 条新资源，准备同步至远程仓库...")
-            git_push_backup(total_new)
+            print(f"📦 今日共收获 {total_new} 条新资源...")
             
-        print(f"\n✅ 任务结束! 总耗时: {time.time()-start_time:.1f}s")
+            # 只有在 GitHub Actions 环境下才执行推送
+            # GITHUB_ACTIONS 是 GitHub 虚拟机的内置环境变量
+            if os.getenv("GITHUB_ACTIONS") == "true":
+                git_push_backup(total_new)
+            else:
+                print("🏠 检测到本地运行，已跳过自动同步步骤。")
