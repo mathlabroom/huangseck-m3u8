@@ -4,78 +4,123 @@ from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import urllib3
+
+# 禁用不安全请求警告（针对某些 .xyz 站点的证书问题）
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- 1. Git 自动同步函数 ---
 def git_push_backup(count):
     """阶段性强制备份：先落袋为安，再处理冲突"""
     try:
-        # 1. 配置基础信息
         subprocess.run(["git", "config", "--local", "user.email", "action@github.com"], check=True)
         subprocess.run(["git", "config", "--local", "user.name", "GitHub Action"], check=True)
         
-        # 2. 先把本地抓到的 1000 条锁死（Add & Commit）
-        # 这样工作区就“干净”了，可以安全执行 pull --rebase
+        # 将 config.json 也加入暂存区，确保自动嗅探到的新域名能被上传
         subprocess.run(["git", "add", "."], check=True)
-        msg = f"自动备份: 累计新增 {count} 条资源"
-        # check=False 是因为如果没有变动 commit 会返回 1，我们不希望它报错
+        msg = f"自动备份: 累计新增 {count} 条资源并同步配置"
         subprocess.run(["git", "commit", "-m", msg], check=False)
         
-        # 3. 这时候再拉取远程更新，解决多人（或多次 Actions）同时运行的冲突
         print("🔄 正在同步远程仓库状态...")
         subprocess.run(["git", "pull", "origin", "main", "--rebase"], check=True)
-        
-        # 4. 最后推送到云端
         subprocess.run(["git", "push", "origin", "main"], check=True)
-        print(f"🚀 [同步成功] 已成功分批推送 {count} 条数据至仓库")
+        print(f"🚀 [同步成功] 已成功分批推送数据至仓库")
         
     except Exception as e:
         print(f"⚠️ [同步跳过] 遇到冲突或网络问题: {e}")
-        # 万一 rebase 失败了，尝试强行退出 rebase 状态，防止脚本卡死
         subprocess.run(["git", "rebase", "--abort"], check=False)
-        
-# --- 2. 配置加载 ---
-def load_config():
+
+# --- 2. 域名双保险嗅探逻辑 (新增) ---
+def get_valid_base_url(current_url):
+    """
+    双保险：验证当前域名，若失效则基于数字规律自动探测新入口
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36..."}
+    
+    # 策略 1: 验证现有域名
+    print(f"🔍 正在验证预设域名: {current_url}")
+    try:
+        # 尝试访问分类页验证连通性
+        res = requests.get(f"{current_url}/vodtype/2-1.html", headers=headers, timeout=5, verify=False)
+        if res.status_code == 200 and "stui-vodlist" in res.text:
+            print("✅ 域名有效，继续执行。")
+            return current_url
+    except:
+        pass
+
+    print("⚠️ 预设域名失效，启动自动寻路...")
+
+    # 策略 2: 自动嗅探 (从当前数字开始往后探测 50 个)
+    match = re.search(r'(\d+)', current_url)
+    start_num = int(match.group(1)) if match else 456170
+    
+    for i in range(start_num, start_num + 50):
+        test_url = f"http://{i}.xyz"
+        try:
+            test_res = requests.get(f"{test_url}/vodtype/2-1.html", headers=headers, timeout=3, verify=False)
+            if test_res.status_code == 200 and "stui-vodlist" in test_res.text:
+                print(f"🚀 发现新入口: {test_url}")
+                return test_url
+        except:
+            continue
+    
+    return current_url
+
+# --- 3. 配置加载与更新 ---
+def load_and_fix_config():
+    config_path = "config.json"
     default_config = {
-        "BASE_URL": "http://ck0d.cc",
-        "CATS": [
-            {"id": "2", "name": "国产系列"},
-            {"id": "21", "name": "欧美高清"},
-            {"id": "26", "name": "骑兵破解"},
-            {"id": "10", "name": "日本无码"},
-            {"id": "7", "name": "日本有码"},
-            {"id": "8", "name": "无码中文字幕"},
-            {"id": "9", "name": "有码中文字幕"},
-            {"id": "4", "name": "动漫"}
-        ],
+        "BASE_URL": "http://456172.xyz",
+        "CATS": [{"id": "2", "name": "国产系列"}], # 这里仅作示例，实际会读取你的 json
         "STOP_DAYS_AGO": 1
     }
-    config_path = "config.json"
+    
     if os.path.exists(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                current_config = json.load(f)
         except:
-            print("⚠️ config.json 格式错误，使用默认配置")
-    return default_config
+            current_config = default_config
+    else:
+        current_config = default_config
 
-config = load_config()
+    # 执行双保险检测
+    old_url = current_config.get("BASE_URL", "")
+    new_url = get_valid_base_url(old_url)
+    
+    # 如果域名变了，更新 config 对象并写回文件
+    if old_url != new_url:
+        current_config["BASE_URL"] = new_url
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(current_config, f, indent=4, ensure_ascii=False)
+        print(f"📝 域名已从 {old_url} 更新为 {new_url} 并存入 config.json")
+    
+    return current_config
+
+# 初始化配置
+config = load_and_fix_config()
 BASE_URL = config["BASE_URL"]
 CATS = config["CATS"]
 
-# --- 3. 网络会话设置 ---
+# --- 4. 网络会话设置 ---
 def get_stable_session():
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount('http://', HTTPAdapter(max_retries=retries))
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36...",
         "Referer": BASE_URL
     })
     return session
 
-# --- 4. 存盘逻辑 (精准去重版) ---
+# --- 5. 存盘逻辑 (倒序去重版 - 修改) ---
 def save_and_update(path, new_lines, db_list, db_path):
+    """
+    修改为倒序排列：今天新抓的在最前面
+    """
     items_dict = {}
+    
+    # 1. 加载旧数据
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -86,20 +131,26 @@ def save_and_update(path, new_lines, db_list, db_path):
                     title_line = clean_block.split('\n')[0].strip()
                     items_dict[title_line] = clean_block
 
+    # 2. 合并新数据 (新数据覆盖旧数据，保持 title 唯一)
     for item in new_lines:
         item = item.strip()
         if item:
             title_line = item.split('\n')[0].strip()
             items_dict[title_line] = item
 
-    sorted_keys = sorted(items_dict.keys())
+    # 3. 排序逻辑：如果你想让 05-13 在最前，这里使用 reverse=True
+    # 这样最新的日期（较大的字符串）会排在前面
+    sorted_keys = sorted(items_dict.keys(), reverse=True) 
+
+    # 4. 写入文件
     with open(path, 'w', encoding='utf-8') as f:
         f.write("#EXTM3U\n")
         for k in sorted_keys:
             f.write(items_dict[k] + "\n")
     
+    # 更新 JSON 数据库
     with open(db_path, 'w', encoding='utf-8') as f:
-        json.dump(db_list, f, ensure_ascii=False)
+        json.dump(db_list, f, ensure_ascii=False, indent=4)
 
 # --- 5. 核心收割逻辑 ---
 def crawl_category(cat, session):
