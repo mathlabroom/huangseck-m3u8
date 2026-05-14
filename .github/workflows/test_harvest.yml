@@ -1,7 +1,9 @@
 name: HSCK_Test_Run
 
 on:
-  workflow_dispatch:
+  schedule:
+    - cron: '0 * * * *' # 每个整点运行
+  workflow_dispatch:      # 允许手动触发
 
 jobs:
   build:
@@ -13,7 +15,11 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # 重要：全量拉取历史，否则中途 push 会冲突
+          fetch-depth: 0 
+
+      - name: 获取北京时间日期
+        # 在最开始就准备好变量
+        run: echo "CURRENT_DATE=$(TZ='Asia/Shanghai' date +'%y%m%d')" >> $GITHUB_ENV
 
       - name: 安装 Python 环境
         uses: actions/setup-python@v4
@@ -21,31 +27,28 @@ jobs:
           python-version: '3.10'
 
       - name: 安装依赖
-        run: |
-          pip install requests beautifulsoup4
+        run: pip install requests beautifulsoup4
 
       - name: 执行收割脚本
-        run: |
-          # 运行过程中，脚本会每 1000 条自动执行 git push
-          python main.py
+        run: python main.py
 
       - name: Final Push changes
         if: always()
         run: |
+          # 基础配置
           git config --global http.postBuffer 524288000
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
-          
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # 【核心修复】：先 add 和 commit，把最后剩下的几百条锁死
-          # 这样工作区就干净了，pull --rebase 就不会报错
+          # 1. 添加所有更改
           git add .
-          git commit -m "Final cleanup: save remaining items" || echo "No changes to commit"
-
-          # 现在可以安全地拉取并合并了
-          git pull origin main --rebase
           
-          # 推送全量结果
+          # 2. 使用环境变量中的日期进行提交
+          # 如果 main.py 内部已经 push 过，这里最后收尾只需提交剩余部分
+          git commit -m "Auto commit: ${{ env.CURRENT_DATE }}" || echo "No changes to commit"
+
+          # 3. 拉取最新的远程改动（防止冲突）并推送
+          git pull origin main --rebase
           git push origin main
