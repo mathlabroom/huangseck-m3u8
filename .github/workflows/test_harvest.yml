@@ -2,7 +2,8 @@ name: HSCK_Test_Run
 
 on:
   schedule:
-    - cron: '15 * * * *'
+    # 含义：每隔 2 小时的第 30 分钟执行
+    - cron: '33 */2 * * *'
   workflow_dispatch:
 
 jobs:
