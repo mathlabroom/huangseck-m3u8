@@ -6,26 +6,39 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import urllib3
 
-# 禁用不安全请求警告（针对某些 .xyz 站点的证书问题）
+# 禁用警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. Git 自动同步函数 ---
+# --- 1. 通知与备份函数 (确保函数彼此独立，不要互相嵌套) ---
+
+def send_wechat(title, content):
+    """通过 Server酱 推送消息"""
+    push_key = os.getenv("PUSH_KEY")
+    if not push_key:
+        print("⚠️ 未配置 PUSH_KEY，取消微信推送")
+        return
+
+    url = f"https://sctapi.ftqq.com/{push_key}.send"
+    data = {"title": title, "desp": content}
+    try:
+        res = requests.post(url, data=data, timeout=10)
+        if res.status_code == 200:
+            print("🔔 微信通知发送成功")
+    except Exception as e:
+        print(f"❌ 微信通知发送失败: {e}")
+
 def git_push_backup(count):
-    """阶段性强制备份：先落袋为安，再处理冲突"""
+    """阶段性强制备份"""
     try:
         subprocess.run(["git", "config", "--local", "user.email", "action@github.com"], check=True)
         subprocess.run(["git", "config", "--local", "user.name", "GitHub Action"], check=True)
-        
-        # 将 config.json 也加入暂存区，确保自动嗅探到的新域名能被上传
         subprocess.run(["git", "add", "."], check=True)
         msg = f"自动备份: 累计新增 {count} 条资源并同步配置"
         subprocess.run(["git", "commit", "-m", msg], check=False)
-        
         print("🔄 正在同步远程仓库状态...")
         subprocess.run(["git", "pull", "origin", "main", "--rebase"], check=True)
         subprocess.run(["git", "push", "origin", "main"], check=True)
-        print(f"🚀 [同步成功] 已成功分批推送数据至仓库")
-        
+        print(f"🚀 [同步成功] 数据已推送至仓库")
     except Exception as e:
         print(f"⚠️ [同步跳过] 遇到冲突或网络问题: {e}")
         subprocess.run(["git", "rebase", "--abort"], check=False)
@@ -315,6 +328,7 @@ def crawl_category(cat, session):
             save_and_update(save_path, all_new_entries, db, db_file)
         else:
             print("ℹ️ 无新数据需要保存。")
+        
     
     return stats
 
@@ -351,32 +365,22 @@ def convert_to_e2_bouquets():
         with open(os.path.join(OUTPUT_DIR, f"subbouquet.{cat_name}.tv"), 'w', encoding='utf-8') as f:
             f.write("\n".join(output_lines) + "\n")
 
-# --- 7. 入口 ---
 if __name__ == "__main__":
     start_time = time.time()
     
-    # 1. 先加载配置（此时内部会完成域名验证）
+    # 初始化
     config = load_and_fix_config() 
-    
-    # 2. 【关键】立即给全局变量 BASE_URL 赋值
-    # 这样 get_stable_session 里的 "Referer": BASE_URL 才能找到值
     BASE_URL = config["BASE_URL"] 
-    
-    # 3. 再初始化会话
     session = get_stable_session()
-    
-    # 4. 获取路由路径
     ROUTE_PATH = get_route_path(BASE_URL, session)
     
     report = []
-    
     print(f"🚀 启动收割程序 | 目标域名: {BASE_URL} | 路由模式: {ROUTE_PATH}")
     
     try:
-        # 3. 遍历 config.json 中的分类
+        # 执行抓取
         for cat in config.get("CATS", []):
             try:
-                # 执行抓取
                 res = crawl_category(cat, session)
                 report.append({"name": cat["name"], **res})
             except KeyboardInterrupt:
@@ -386,25 +390,37 @@ if __name__ == "__main__":
                 print(f"❌ 分类 {cat['name']} 运行出错: {e}")
                 continue
                 
+    except Exception as e:
+        print(f"💥 主程序严重异常: {e}")
+        
     finally:
-        # 4. 总结与转换
         print(f"\n{'='*30}\n收割总结 (今日日期: {datetime.now().strftime('%m-%d')})\n{'='*30}")
-        total_new = 0
-        for r in report:
-            new_count = r.get('new', 0)
-            total_new += new_count
-            print(f"  {r['name']}: 新增 {new_count}")
         
-        # 5. 阶段性转换 E2 格式
-        convert_to_e2_bouquets()
-        
-        # 6. 如果今天有新货，最后执行一次 Git 推送
-        if total_new > 0:
-            print(f"📦 今日共收获 {total_new} 条新资源...")
+        # 无论如何都尝试生成一次 Bouquet
+        try:
+            convert_to_e2_bouquets()
+        except:
+            pass
+
+        # 汇总报告
+        if 'report' in locals() and report:
+            total_all = sum(r.get('new', 0) for r in report if isinstance(r, dict))
+            summary_text = "\n".join([f"- {r['name']}: +{r['new']}" for r in report])
             
-            # 只有在 GitHub Actions 环境下才执行推送
-            # GITHUB_ACTIONS 是 GitHub 虚拟机的内置环境变量
-            if os.getenv("GITHUB_ACTIONS") == "true":
-                git_push_backup(total_new)
-            else:
-                print("🏠 检测到本地运行，已跳过自动同步步骤。")
+            print(f"📊 详细汇总:\n{summary_text}")
+            
+            if total_all > 0:
+                if os.getenv("GITHUB_ACTIONS") == "true":
+                    # 微信推送
+                    msg_title = f"🚀 今日收割完成！新增 {total_all} 条"
+                    msg_content = f"### 📥 自动收割汇总\n\n{summary_text}\n\n---\n📅 结束时间：{datetime.now().strftime('%m-%d %H:%M')}"
+                    send_wechat(msg_title, msg_content)
+                    
+                    # Git 备份
+                    git_push_backup(total_all)
+                else:
+                    print(f"🏠 本地运行结束，今日斩获 {total_all} 条。")
+        else:
+            print("ℹ️ 任务结束，未生成有效报告。")
+
+        print(f"✅ 流程全部结束，耗时: {time.time()-start_time:.1f}s")
