@@ -30,7 +30,10 @@ jobs:
       - name: 安装依赖
         run: pip install requests beautifulsoup4
 
-      - name: 执行收割脚本
+      - name: 运行收割脚本
+        env:
+          # 这行是将刚才保险柜里的 PUSH_KEY 读取出来，映射成系统的环境变量
+          PUSH_KEY: ${{ secrets.PUSH_KEY }}
         run: python main.py
 
       - name: Final Push changes
