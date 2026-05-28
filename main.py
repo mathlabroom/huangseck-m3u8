@@ -1,4 +1,4 @@
-import os, re, json, time, requests, urllib.parse
+import os, re, random, json, time, requests, urllib.parse
 import subprocess
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -211,6 +211,9 @@ def crawl_category(cat, session):
         
             try:
                 res = session.get(url, timeout=15)
+                if res.status_code >= 500:
+                    print(f"⚠️ 目标服务器响应异常 (Status: {res.status_code})，可能数据库已崩，触发紧急避险收工...")
+                    break
                 res.encoding = 'utf-8'
                 soup = BeautifulSoup(res.text, 'html.parser')
                 
@@ -283,6 +286,7 @@ def crawl_category(cat, session):
                         play_link = full_link + ("&" if "?" in full_link else "?") + "play=1"
                         
                         p_res = session.get(play_link, timeout=12)
+                        time.sleep(random.uniform(0.3, 0.8))
                         m3u8_match = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
 
                         if m3u8_match:
@@ -311,7 +315,7 @@ def crawl_category(cat, session):
                         continue
 
                 if found_old_content: break
-                time.sleep(0.5)
+                time.sleep(1.5)
 
             except Exception as e:
                 print(f"  🚨 页面出错: {e}")
