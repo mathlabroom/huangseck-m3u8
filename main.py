@@ -286,7 +286,6 @@ def crawl_category(cat, session):
                         play_link = full_link + ("&" if "?" in full_link else "?") + "play=1"
                         
                         p_res = session.get(play_link, timeout=12)
-                        time.sleep(random.uniform(0.3, 0.8))
                         m3u8_match = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
 
                         if m3u8_match:
