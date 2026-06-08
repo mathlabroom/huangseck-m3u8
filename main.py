@@ -9,7 +9,7 @@ import urllib3
 # 禁用警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. 通知与备份函数 (确保函数彼此独立，不要互相嵌套) ---
+# --- 1. 通知与备份函数 ---
 
 def send_wechat(title, content):
     """通过 Server酱 推送消息"""
@@ -43,17 +43,13 @@ def git_push_backup(count):
         print(f"⚠️ [同步跳过] 遇到冲突或网络问题: {e}")
         subprocess.run(["git", "rebase", "--abort"], check=False)
 
-# --- 2. 域名双保险嗅探逻辑 (新增) ---
+# --- 2. 域名双保险嗅探逻辑 ---
 def get_valid_base_url(current_url):
-    """
-    双保险：验证当前域名，若失效则基于数字规律自动探测新入口
-    """
+    """双保险：验证当前域名，若失效则基于数字规律自动探测新入口"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36..."}
     
-    # 策略 1: 验证现有域名
     print(f"🔍 正在验证预设域名: {current_url}")
     try:
-        # 尝试访问分类页验证连通性
         res = requests.get(f"{current_url}/vodtype/2-1.html", headers=headers, timeout=5, verify=False)
         if res.status_code == 200 and "stui-vodlist" in res.text:
             print("✅ 域名有效，继续执行。")
@@ -63,7 +59,6 @@ def get_valid_base_url(current_url):
 
     print("⚠️ 预设域名失效，启动自动寻路...")
 
-    # 策略 2: 自动嗅探 (从当前数字开始往后探测 50 个)
     match = re.search(r'(\d+)', current_url)
     start_num = int(match.group(1)) if match else 456170
     
@@ -80,16 +75,10 @@ def get_valid_base_url(current_url):
     return current_url
 
 def get_route_path(base_url, session):
-    """
-    直接从首页源码解析出当前的分类路由格式
-    """
+    """直接从首页源码解析出当前的分类路由格式"""
     try:
-        # 1. 访问首页
         res = session.get(base_url, timeout=10, verify=False)
         res.encoding = 'utf-8'
-        
-        # 2. 正则匹配：寻找包含 .html 的链接前缀
-        # 这里的正则专门抓取类似 /vodtype/ 或 /p/ 这种出现在数字前面的字符
         match = re.search(r'href="(/[a-z0-9]+/)\d+\.html"', res.text)
         
         if match:
@@ -108,7 +97,7 @@ def load_and_fix_config():
     config_path = "config.json"
     default_config = {
         "BASE_URL": "http://456172.xyz",
-        "CATS": [{"id": "2", "name": "国产系列"}], # 这里仅作示例，实际会读取你的 json
+        "CATS": [{"id": "2", "name": "国产系列"}],
         "STOP_DAYS_AGO": 1
     }
     
@@ -121,11 +110,9 @@ def load_and_fix_config():
     else:
         current_config = default_config
 
-    # 执行双保险检测
     old_url = current_config.get("BASE_URL", "")
     new_url = get_valid_base_url(old_url)
     
-    # 如果域名变了，更新 config 对象并写回文件
     if old_url != new_url:
         current_config["BASE_URL"] = new_url
         with open(config_path, "w", encoding="utf-8") as f:
@@ -134,23 +121,19 @@ def load_and_fix_config():
     
     return current_config
 
-
 # --- 4. 网络会话设置 ---
-def get_stable_session():
+def get_stable_session(base_url):
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount('http://', HTTPAdapter(max_retries=retries))
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36...",
-        "Referer": BASE_URL
+        "Referer": base_url
     })
     return session
 
-# --- 5. 存盘逻辑 (倒序去重版 - 修改) ---
+# --- 5. 存盘逻辑 (倒序去重版) ---
 def save_and_update(path, new_lines, db_list, db_path):
-    """
-    修改为倒序排列：今天新抓的在最前面
-    """
     items_dict = {}
     
     # 1. 加载旧数据
@@ -164,15 +147,14 @@ def save_and_update(path, new_lines, db_list, db_path):
                     title_line = clean_block.split('\n')[0].strip()
                     items_dict[title_line] = clean_block
 
-    # 2. 合并新数据 (新数据覆盖旧数据，保持 title 唯一)
+    # 2. 合并新数据
     for item in new_lines:
         item = item.strip()
         if item:
             title_line = item.split('\n')[0].strip()
             items_dict[title_line] = item
 
-    # 3. 排序逻辑：如果你想让 05-13 在最前，这里使用 reverse=True
-    # 这样最新的日期（较大的字符串）会排在前面
+    # 3. 倒序排列（最新日期在最前）
     sorted_keys = sorted(items_dict.keys(), reverse=True) 
 
     # 4. 写入文件
@@ -185,7 +167,7 @@ def save_and_update(path, new_lines, db_list, db_path):
     with open(db_path, 'w', encoding='utf-8') as f:
         json.dump(db_list, f, ensure_ascii=False, indent=4)
 
-# --- 5. 核心收割逻辑 ---
+# --- 6. 核心收割逻辑 (高精准改版) ---
 def crawl_category(cat, session):
     cat_id, cat_name = cat["id"], cat["name"]
     db_file = f"./{cat_name}.json"
@@ -204,26 +186,22 @@ def crawl_category(cat, session):
 
     try:
         for p in range(1, 10000):
-                # --- 核心改动处 ---
-            # 删掉硬编码的 /vodtype/，换成识别出来的 ROUTE_PATH
-            # 注意：如果 ROUTE_PATH 是 "/vodtype/"，生成的 url 就是 .../vodtype/2-1.html
             url = f"{BASE_URL}{ROUTE_PATH}{cat_id}-{p}.html"
         
             try:
                 res = session.get(url, timeout=15)
                 if res.status_code >= 500:
-                    print(f"⚠️ 目标服务器响应异常 (Status: {res.status_code})，可能数据库已崩，触发紧急避险收工...")
+                    print(f"⚠️ 目标服务器异常 (Status: {res.status_code})，触发紧急避险收工...")
                     break
                 res.encoding = 'utf-8'
                 soup = BeautifulSoup(res.text, 'html.parser')
                 
-                # 检查列表是否存在
                 items = soup.find_all('li')
                 if not items: break
 
-                # 快速判断是否有真视频 (复用你的逻辑)
-                has_real_video = any('/v/' in a.get('href', '') for a in soup.find_all('a'))
-                if not has_real_video and p > 1: # 第一页如果有广告很正常，后面页全是广告就停
+                # 快速判断是否有真视频 
+                has_real_video = any('/v/' in a.get('href', '') or '/vodplay/' in a.get('href', '') for a in soup.find_all('a'))
+                if not has_real_video and p > 1: 
                     print(f"🏁 第 {p} 页全是广告/非视频内容。")
                     break
                 
@@ -231,40 +209,34 @@ def crawl_category(cat, session):
                 found_old_content = False
                 
                 for li in items:
-                    # --- 2. 特征嗅探 ---
-                    title_tag = li.find('a', attrs={"title": True})
-                    if not title_tag or title_tag.get('target') == 'blank':
-                        continue
+                    # 🎯 【防外链改动 1】精准下沉到 h4.title 节点拿 A 标签，洗掉外链广告
+                    h4_title = li.find('h4', class_='title')
+                    if not h4_title: continue
                     
-                    title = title_tag.get('title').strip()
-                    href = title_tag.get('href', '')
-                    if any(x in href for x in ['javascript', 'about:', 'index.php']):
-                        continue
+                    title_tag = h4_title.find('a')
+                    if not title_tag: continue
+                    
+                    title = title_tag.get('title') or title_tag.get_text(strip=True)
+                    title = title.strip()
+                    href = title_tag.get('href', '').strip()
+                    
+                    # 🚫 【防外链改动 2】强力斩杀线：如果是绝对路径外链或带引流特征，直接踢出
+                    if href.startswith('http://') or href.startswith('https://'): continue
+                    if any(x in href for x in ['javascript', 'about:', 'index.php', 'channelCode']): continue
+                    if not title or any(x in title for x in ["勾引", "强上", "性爱"]): continue # 敏感词清洗过滤
 
-                    # --- 3. 自动识别日期 (防混淆增强版) ---
+                    # 📅 【防外链改动 3】精准吸附更新日期（完美适配新版源码尾部裸露日期）
                     date_val = "01-01"
-                
-                    # 【关键】不再在整个 li 里盲搜，而是先精准定位到存放日期的 sub 栏目
-                    sub_tag = li.find('p', class_='sub')
-                    if sub_tag:
-                        # 仅在 sub 标签的文字里找日期，这就过滤掉了标题里的 2022-07-10
-                        sub_text = sub_tag.get_text(strip=True)
-                        # 匹配末尾的 MM-DD
+                    p_sub = li.find('p', class_='sub')
+                    if p_sub:
+                        sub_text = p_sub.get_text(strip=True)
                         date_matches = re.findall(r'(\d{2}-\d{2})', sub_text)
                         if date_matches:
-                            # 即使 sub 里有多个符合条件的，日期通常也是最后一个
-                            date_val = date_matches[-1]
+                            date_val = date_matches[-1] # 取最后一个，避开高仿标题年份
                 
-                    # 如果没找到 sub 标签，作为保底，我们搜寻 li 文本中“最后”出现的一个日期格式
                     if date_val == "01-01":
-                        li_text = li.get_text(strip=True)
-                        all_dates = re.findall(r'(\d{2}-\d{2})', li_text)
-                        if all_dates:
-                            # 取最后一个，避开标题里可能出现的日期
-                            date_val = all_dates[-1]
-
-                    # 打印调试，看看现在识别对了吗
-                    # print(f"🔍 标题: {title[:15]}... | 判定日期: {date_val}")
+                        all_dates = re.findall(r'(\d{2}-\d{2})', li.get_text(strip=True))
+                        if all_dates: date_val = all_dates[-1]
 
                     # --- 4. 截止判定 ---
                     if p > 3 and date_val != "01-01":
@@ -277,8 +249,7 @@ def crawl_category(cat, session):
                     v_id_match = re.search(r'(\d+)', href)
                     if not v_id_match: continue
                     v_id = v_id_match.group(1)
-                    if v_id in db_set:
-                        continue
+                    if v_id in db_set: continue
 
                     # --- 6. 捕获 M3U8 (带 play 参数) ---
                     try:
@@ -293,7 +264,7 @@ def crawl_category(cat, session):
                             if "%" in m3u8:
                                 m3u8 = urllib.parse.unquote(m3u8)
 
-                            img_tag = li.find('img') or li.find(attrs={"data-original": True})
+                            img_tag = li.find('img') or li.find('a', class_='lazyload')
                             cover_url = ""
                             if img_tag:
                                 cover_url = img_tag.get('data-original') or img_tag.get('src') or ""
@@ -321,21 +292,18 @@ def crawl_category(cat, session):
                 break
 
     except KeyboardInterrupt:
-        # --- 核心改进：捕获手动中断 ---
         print("\n\n🛑 检测到手动中断（Ctrl+C）！正在准备紧急存盘...")
     
     finally:
-        # --- 无论正常结束还是中断，都会执行这里 ---
         if all_new_entries:
             print(f"💾 正在写入缓存中的 {len(all_new_entries)} 条资源至硬盘...")
             save_and_update(save_path, all_new_entries, db, db_file)
         else:
             print("ℹ️ 无新数据需要保存。")
         
-    
     return stats
 
-# --- 6. E2 Bouquet 转换 ---
+# --- 7. E2 Bouquet 转换 ---
 def convert_to_e2_bouquets():
     BASE_DIR = './VideoResults'
     OUTPUT_DIR = './E2_Bouquets'
@@ -374,7 +342,7 @@ if __name__ == "__main__":
     # 初始化
     config = load_and_fix_config() 
     BASE_URL = config["BASE_URL"] 
-    session = get_stable_session()
+    session = get_stable_session(BASE_URL)
     ROUTE_PATH = get_route_path(BASE_URL, session)
     
     report = []
@@ -399,11 +367,9 @@ if __name__ == "__main__":
     finally:
         print(f"\n{'='*30}\n收割总结 (今日日期: {datetime.now().strftime('%m-%d')})\n{'='*30}")
         
-        # 无论如何都尝试生成一次 Bouquet 并压缩成 gz
         try:
             convert_to_e2_bouquets()
             
-            # ===== 🎯 纯功能：新增 .tv 自动压缩成 .gz 逻辑 =====
             import gzip
             E2_DIR = './E2_Bouquets'
             if os.path.exists(E2_DIR):
@@ -415,7 +381,6 @@ if __name__ == "__main__":
                             with gzip.open(gz_path, 'wb') as f_out:
                                 f_out.writelines(f_in)
                 print("🗜️ [压缩成功] E2_Bouquets 目录下的 .tv 文件已全部同步生成 .tv.gz")
-            # ===================================================
             
         except Exception as e:
             print(f"⚠️ E2 节目单转换或压缩失败: {e}")
@@ -428,7 +393,6 @@ if __name__ == "__main__":
             print(f"📊 详细汇总:\n{summary_text}")
             
             if total_all > 0:
-                # 微信推送依然只在 Actions 云端触发，防止本地运行轰炸微信
                 if os.getenv("GITHUB_ACTIONS") == "true":
                     msg_title = f"🚀 今日收割完成！新增 {total_all} 条"
                     msg_content = f"### 📥 自动收割汇总\n\n{summary_text}\n\n---\n📅 结束时间：{datetime.now().strftime('%m-%d %H:%M')}"
@@ -436,7 +400,6 @@ if __name__ == "__main__":
                 else:
                     print(f"🏠 本地运行检测到新数据...")
 
-                # 🎯 核心修正：挪出判断，无论本地还是 Actions 跑，只要有新资源，就铁定强制提交备份推送！
                 git_push_backup(total_all)
             else:
                 print("ℹ️ 库内无数据更新，跳过同步。")
