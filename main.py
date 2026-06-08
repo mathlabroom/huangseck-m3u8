@@ -222,7 +222,7 @@ def crawl_category(cat, session):
                 if not items: break
 
                 # 快速判断是否有真视频 (复用你的逻辑)
-                has_real_video = any('/stui-vodlist__box/' in a.get('href', '') for a in soup.find_all('a'))
+                has_real_video = any('/v/' in a.get('href', '') for a in soup.find_all('a'))
                 if not has_real_video and p > 1: # 第一页如果有广告很正常，后面页全是广告就停
                     print(f"🏁 第 {p} 页全是广告/非视频内容。")
                     break
