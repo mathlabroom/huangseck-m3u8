@@ -168,6 +168,7 @@ def save_and_update(path, new_lines, db_list, db_path):
         json.dump(db_list, f, ensure_ascii=False, indent=4)
 
 # --- 6. 核心收割逻辑 (高精准改版) ---
+# --- 6. 核心收割逻辑 (带 Fernet 暴力破解版) ---
 def crawl_category(cat, session):
     cat_id, cat_name = cat["id"], cat["name"]
     db_file = f"./{cat_name}.json"
@@ -183,6 +184,14 @@ def crawl_category(cat, session):
     all_new_entries = []
     stop_days = config.get("STOP_DAYS_AGO", 1)
     stop_date_threshold = (datetime.now() - timedelta(days=stop_days)).strftime("%m-%d")
+
+    # 🔒 检查解密环境
+    has_crypto = False
+    try:
+        from cryptography.fernet import Fernet
+        has_crypto = True
+    except ImportError:
+        print("⚠️ 提示: 未检测到 cryptography 库，将无法破解新版验证墙，请确保 pip install cryptography")
 
     try:
         for p in range(1, 10000):
@@ -209,7 +218,7 @@ def crawl_category(cat, session):
                 found_old_content = False
                 
                 for li in items:
-                    # 🎯 【防外链改动 1】精准下沉到 h4.title 节点拿 A 标签，洗掉外链广告
+                    # 🎯 精准下沉到 h4.title 节点拿 A 标签，洗掉外链广告
                     h4_title = li.find('h4', class_='title')
                     if not h4_title: continue
                     
@@ -220,19 +229,19 @@ def crawl_category(cat, session):
                     title = title.strip()
                     href = title_tag.get('href', '').strip()
                     
-                    # 🚫 【防外链改动 2】强力斩杀线：如果是绝对路径外链或带引流特征，直接踢出
+                    # 🚫 强力斩杀线：如果是绝对路径外链或带引流特征，直接踢出
                     if href.startswith('http://') or href.startswith('https://'): continue
                     if any(x in href for x in ['javascript', 'about:', 'index.php', 'channelCode']): continue
-                    if not title or any(x in title for x in ["勾引", "强上", "性爱"]): continue # 敏感词清洗过滤
+                    if not title or any(x in title for x in ["勾引", "强上", "性爱"]): continue 
 
-                    # 📅 【防外链改动 3】精准吸附更新日期（完美适配新版源码尾部裸露日期）
+                    # 📅 精准吸附更新日期
                     date_val = "01-01"
                     p_sub = li.find('p', class_='sub')
                     if p_sub:
                         sub_text = p_sub.get_text(strip=True)
                         date_matches = re.findall(r'(\d{2}-\d{2})', sub_text)
                         if date_matches:
-                            date_val = date_matches[-1] # 取最后一个，避开高仿标题年份
+                            date_val = date_matches[-1] 
                 
                     if date_val == "01-01":
                         all_dates = re.findall(r'(\d{2}-\d{2})', li.get_text(strip=True))
@@ -251,16 +260,41 @@ def crawl_category(cat, session):
                     v_id = v_id_match.group(1)
                     if v_id in db_set: continue
 
-                    # --- 6. 捕获 M3U8 (带 play 参数) ---
+                    # --- 6. 捕获 M3U8 (解密/常规双保底) ---
                     try:
                         full_link = urllib.parse.urljoin(BASE_URL, href)
                         play_link = full_link + ("&" if "?" in full_link else "?") + "play=1"
                         
                         p_res = session.get(play_link, timeout=12)
-                        m3u8_match = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
+                        p_res.encoding = 'utf-8'
+                        
+                        m3u8 = ""
+                        
+                        # ✨ 策略 A：如果触发了加密墙，且环境支持，直接硬解
+                        if "window.VPCFG" in p_res.text and "window.VPFK" in p_res.text:
+                            if has_crypto:
+                                try:
+                                    vp_cfg = re.search(r"window\.VPCFG\s*=\s*['\"]([^'\"]+)['\"]", p_res.text).group(1)
+                                    vp_fk = re.search(r"window\.VPFK\s*=\s*['\"]([^'\"]+)['\"]", p_res.text).group(1)
+                                    
+                                    f_cipher = Fernet(vp_fk.encode('utf-8'))
+                                    decrypted_data = f_cipher.decrypt(vp_cfg.encode('utf-8')).decode('utf-8')
+                                    
+                                    json_data = json.loads(decrypted_data)
+                                    m3u8 = json_data.get('url', '')
+                                except Exception as decrypt_err:
+                                    print(f"   ❌ 算法破译失败: {decrypt_err}")
+                            else:
+                                print("   ⚠️ 遭遇验证墙，但因缺乏 cryptography 库，无法解密！")
+                        
+                        # ✨ 策略 B：老版本兼容（如果没有加密墙，直接正则抓）
+                        if not m3u8:
+                            m3u8_match = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
+                            if m3u8_match:
+                                m3u8 = m3u8_match.group(0).replace('\\/', '/').replace('\\', '')
 
-                        if m3u8_match:
-                            m3u8 = m3u8_match.group(0).replace('\\/', '/').replace('\\', '')
+                        # 保存逻辑
+                        if m3u8:
                             if "%" in m3u8:
                                 m3u8 = urllib.parse.unquote(m3u8)
 
@@ -274,10 +308,9 @@ def crawl_category(cat, session):
                             db.append(v_id)
                             db_set.add(v_id)
                             stats["new"] += 1
-                            print(f"  ✅ [嗅探成功] {date_val} | {title[:15]}...")
+                            print(f"  ✅ [解密成功] {date_val} | {title[:15]}...")
                             
                             if stats["new"] > 0 and stats["new"] % 1000 == 0:
-                                print(f"📦 累计 1000 条，同步中...")
                                 save_and_update(save_path, all_new_entries, db, db_file)
                                 git_push_backup(stats["new"])
                                 all_new_entries = [] 
@@ -292,14 +325,11 @@ def crawl_category(cat, session):
                 break
 
     except KeyboardInterrupt:
-        print("\n\n🛑 检测到手动中断（Ctrl+C）！正在准备紧急存盘...")
-    
+        print("\n\n🛑 检测到手动中断！正在紧急存盘...")
     finally:
         if all_new_entries:
             print(f"💾 正在写入缓存中的 {len(all_new_entries)} 条资源至硬盘...")
             save_and_update(save_path, all_new_entries, db, db_file)
-        else:
-            print("ℹ️ 无新数据需要保存。")
         
     return stats
 
