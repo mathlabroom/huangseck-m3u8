@@ -1,12 +1,13 @@
 import os, re, random, json, time, requests, urllib.parse
 import subprocess
+import gzip
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import urllib3
 
-# 禁用警告
+# 禁用安全请求警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- 1. 通知与备份函数 ---
@@ -28,50 +29,85 @@ def send_wechat(title, content):
         print(f"❌ 微信通知发送失败: {e}")
 
 def git_push_backup(count):
-    """阶段性强制备份"""
+    """阶段性强制备份（带二进制冲突无脑覆盖策略，防止 Actions 挂掉）"""
     try:
         subprocess.run(["git", "config", "--local", "user.email", "action@github.com"], check=True)
         subprocess.run(["git", "config", "--local", "user.name", "GitHub Action"], check=True)
         subprocess.run(["git", "add", "."], check=True)
         msg = f"自动备份: 累计新增 {count} 条资源并同步配置"
         subprocess.run(["git", "commit", "-m", msg], check=False)
-        print("🔄 正在同步远程仓库状态...")
-        subprocess.run(["git", "pull", "origin", "main", "--rebase"], check=True)
+        
+        print("🔄 正在同步远程仓库状态（如遇二进制冲突，将以本地最新数据为准）...")
+        # 🎯 加上 -X ours 参数，遇到 .tv.gz 冲突直接以本地新生成的为准，拒绝远程旧包
+        result = subprocess.run(["git", "pull", "origin", "main", "--rebase", "-X", "ours"], check=False)
+        
+        if result.returncode != 0:
+            print("⚠️ 检测到强力冲突，执行强制覆盖策略...")
+            subprocess.run(["git", "add", "."], check=False)
+            subprocess.run(["git", "rebase", "--continue"], check=False)
+
         subprocess.run(["git", "push", "origin", "main"], check=True)
         print(f"🚀 [同步成功] 数据已推送至仓库")
     except Exception as e:
         print(f"⚠️ [同步跳过] 遇到冲突或网络问题: {e}")
         subprocess.run(["git", "rebase", "--abort"], check=False)
 
-# --- 2. 域名双保险嗅探逻辑 ---
+# --- 2. 完美的自动寻路与域名智能嗅探逻辑 ---
+
 def get_valid_base_url(current_url):
-    """双保险：验证当前域名，若失效则基于数字规律自动探测新入口"""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36..."}
+    """
+    智能探路者：验证当前域名，若失效则通过固定发布页自动追踪并抓取最新的跳转域名。
+    不再进行愚蠢的数字循环拼运气。
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
-    print(f"🔍 正在验证预设域名: {current_url}")
+    print(f"🔍 正在验证当前预设域名: {current_url}")
     try:
-        res = requests.get(f"{current_url}/vodtype/2-1.html", headers=headers, timeout=5, verify=False)
-        if res.status_code == 200 and "stui-vodlist" in res.text:
-            print("✅ 域名有效，继续执行。")
-            return current_url
+        if current_url:
+            res = requests.get(f"{current_url}/vodtype/2-1.html", headers=headers, timeout=6, verify=False)
+            if res.status_code == 200 and "stui-vodlist" in res.text:
+                print("✅ 预设域名依然稳健有效，继续执行。")
+                return current_url
     except:
         pass
 
-    print("⚠️ 预设域名失效，启动自动寻路...")
+    # 🚨 走到这里说明预设域名已经寿终正寝，启动核心自动寻路机制
+    print("⚠️ 预设域名已失效！启动智能追踪器搜寻新入口...")
+    
+    # 固定的永久发布页/导航页（如果这个变了，只需改这里）
+    anchor_host = "http://hsck.us" 
+    try:
+        print(f"📡 正在请求永久发布页: {anchor_host}")
+        req_res = requests.get(anchor_host, headers=headers, timeout=10, verify=False)
+        html = req_res.text
+        soup = BeautifulSoup(html, "lxml" if "lxml" in html else "html.parser")
 
-    match = re.search(r'(\d+)', current_url)
-    start_num = int(match.group(1)) if match else 456170
-    
-    for i in range(start_num, start_num + 50):
-        test_url = f"http://{i}.xyz"
-        try:
-            test_res = requests.get(f"{test_url}/vodtype/2-1.html", headers=headers, timeout=3, verify=False)
-            if test_res.status_code == 200 and "stui-vodlist" in test_res.text:
-                print(f"🚀 发现新入口: {test_url}")
-                return test_url
-        except:
-            continue
-    
+        # 🎯 策略一：检查是否身处带有跳转代码的引导页
+        if "strU=" in html and soup.find(id="hao123"):
+            match = re.search(r'strU="(https?://[a-zA-Z0-9:/.]+\?u=?)"', html)
+            if match:
+                redirect_url = f"{match.group(1)}{anchor_host}/&p=/"
+                print(f"🔗 捕获到动态跳转接口: {redirect_url}，正在追踪最终归宿...")
+                # 追踪 302 重定向响应头里的 Location
+                track_res = requests.head(redirect_url, headers=headers, timeout=8, verify=False, allow_redirects=False)
+                location = track_res.headers.get("Location")
+                if location:
+                    loc_match = re.match(r"(https?://[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+)", location)
+                    if loc_match:
+                        discovered_url = loc_match.group(1)
+                        print(f"🚀 [追踪成功] 通过重定向接口捕获到最新官网: {discovered_url}")
+                        return discovered_url
+
+        # 🎯 策略二：如果发布页已经直接展现了官网内容（没有拦截墙）
+        if len(html) > 20000 and soup.find(class_="stui-warp-content"):
+            print(f"🚀 [寻路成功] 发布页本身已展现官网特征，直接采用: {anchor_host}")
+            return anchor_host
+
+    except Exception as tracker_err:
+        print(f"❌ 智能寻路系统发生故障: {tracker_err}")
+
+    # 🍂 实在找不到的终极摆烂保底：返回原域名，寄希望于下次网络恢复
+    print("⚠️ 寻路系统未能探明新域名，维持原域名进入观察期。")
     return current_url
 
 def get_route_path(base_url, session):
@@ -117,7 +153,7 @@ def load_and_fix_config():
         current_config["BASE_URL"] = new_url
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(current_config, f, indent=4, ensure_ascii=False)
-        print(f"📝 域名已从 {old_url} 更新为 {new_url} 并存入 config.json")
+        print(f"📝 智能雷达已将新域名 {new_url} 写入持久化配置文件 config.json")
     
     return current_config
 
@@ -126,8 +162,9 @@ def get_stable_session(base_url):
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount('http://', HTTPAdapter(max_retries=retries))
+    session.mount('https://', HTTPAdapter(max_retries=retries))
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36...",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": base_url
     })
     return session
@@ -167,8 +204,7 @@ def save_and_update(path, new_lines, db_list, db_path):
     with open(db_path, 'w', encoding='utf-8') as f:
         json.dump(db_list, f, ensure_ascii=False, indent=4)
 
-# --- 6. 核心收割逻辑 (高精准改版) ---
-# --- 6. 核心收割逻辑 (带 Fernet 暴力破解版) ---
+# --- 6. 核心收割逻辑 (带 Fernet 密码破解版) ---
 def crawl_category(cat, session):
     cat_id, cat_name = cat["id"], cat["name"]
     db_file = f"./{cat_name}.json"
@@ -198,7 +234,7 @@ def crawl_category(cat, session):
             url = f"{BASE_URL}{ROUTE_PATH}{cat_id}-{p}.html"
         
             try:
-                res = session.get(url, timeout=15)
+                res = session.get(url, timeout=15, verify=False)
                 if res.status_code >= 500:
                     print(f"⚠️ 目标服务器异常 (Status: {res.status_code})，触发紧急避险收工...")
                     break
@@ -265,7 +301,7 @@ def crawl_category(cat, session):
                         full_link = urllib.parse.urljoin(BASE_URL, href)
                         play_link = full_link + ("&" if "?" in full_link else "?") + "play=1"
                         
-                        p_res = session.get(play_link, timeout=12)
+                        p_res = session.get(play_link, timeout=12, verify=False)
                         p_res.encoding = 'utf-8'
                         
                         m3u8 = ""
@@ -369,7 +405,7 @@ def convert_to_e2_bouquets():
 if __name__ == "__main__":
     start_time = time.time()
     
-    # 初始化
+    # 智能寻路，并初始化配置
     config = load_and_fix_config() 
     BASE_URL = config["BASE_URL"] 
     session = get_stable_session(BASE_URL)
@@ -400,7 +436,6 @@ if __name__ == "__main__":
         try:
             convert_to_e2_bouquets()
             
-            import gzip
             E2_DIR = './E2_Bouquets'
             if os.path.exists(E2_DIR):
                 for file_name in os.listdir(E2_DIR):
