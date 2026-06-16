@@ -242,53 +242,61 @@ def crawl_category(cat, session):
                 soup = BeautifulSoup(res.text, 'html.parser')
                 
                 items = soup.find_all('li')
-                if not items: break
+                if not items: 
+                    print(f"\n🏁 第 {p} 页已无更多内容，全量收割完毕。")
+                    break
 
-                # 快速判断是否有真视频 
-                has_real_video = any('/v/' in a.get('href', '') or '/vodplay/' in a.get('href', '') for a in soup.find_all('a'))
+                # 🎯 【第一道防线】全页真视频大检测：
+                # 只要整页里有任何一个 lazyload 图片属于 tutu1.space 域名，就放行，否则说明到广告页或尽头了
+                has_real_video = any(
+                    "tutu1.space" in (img.get('data-original', '') or img.get('src', '')) 
+                    for img in soup.find_all(['img', 'a'], class_='lazyload')
+                )
+                
                 if not has_real_video and p > 1: 
-                    print(f"🏁 第 {p} 页全是广告/非视频内容。")
+                    print(f"🏁 第 {p} 页未能匹配到 tutu1.space 封面图床，安全策略触发，收工。")
                     break
                 
-                print(f"🌐 正在扫描第 {p} 页...")
-                found_old_content = False
+                print(f"🌐 正在扫描第 {p} 页...", end="\r")
                 
                 for li in items:
                     h4_title = li.find('h4', class_='title')
                     if not h4_title: continue
-    
+                    
                     title_tag = h4_title.find('a')
                     if not title_tag: continue
-    
+                    
                     title = title_tag.get('title') or title_tag.get_text(strip=True)
                     title = title.strip()
                     href = title_tag.get('href', '').strip()
-    
-                    # 🚫 强力斩杀线一：如果是绝对路径外链（比如广告的 https://nnzz...），直接踢出
+                    
+                    # 🚫 强力斩杀线：绝对路径外链（广告）直接踢出
                     if href.startswith('http://') or href.startswith('https://'): continue
                     if any(x in href for x in ['javascript', 'about:', 'index.php', 'channelCode']): continue
 
-                    # 🎯 黄金特征校验：提取图片并强力核验域名
+                    # 🎯 【第二道防线】单条精准过滤：
+                    # 抓取当前这条资源的封面图
                     img_tag = li.find('img') or li.find('a', class_='lazyload')
                     cover_url = ""
                     if img_tag:
                         cover_url = img_tag.get('data-original') or img_tag.get('src') or ""
-    
-                    # 🔥 核心锁死：如果图片链接里不包含真正的图床域名 tutu1.space，百分之百是广告，直接扔掉！
+                    
+                    # 🔥 核心锁死：如果单条视频的图片里不包含真正的图床域名，百分之百是穿插的菠菜引流广告，直接扔掉！
                     if "tutu1.space" not in cover_url: 
                         continue
 
-                    # 📅 提取日期
+                    # 📅 提取日期（仅用作台单展示）
                     date_val = "01-01"
                     p_sub = li.find('p', class_='sub')
                     if p_sub:
                         sub_text = p_sub.get_text(strip=True)
                         date_matches = re.findall(r'(\d{2}-\d{2})', sub_text)
                         if date_matches: date_val = date_matches[-1] 
-
+                
                     if date_val == "01-01":
                         all_dates = re.findall(r'(\d{2}-\d{2})', li.get_text(strip=True))
                         if all_dates: date_val = all_dates[-1]
+
 
                     # --- 5. 去重判定 ---
                     v_id_match = re.search(r'(\d+)', href)
