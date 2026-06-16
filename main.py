@@ -254,41 +254,41 @@ def crawl_category(cat, session):
                 found_old_content = False
                 
                 for li in items:
-                    # 🎯 精准下沉到 h4.title 节点拿 A 标签，洗掉外链广告
                     h4_title = li.find('h4', class_='title')
                     if not h4_title: continue
-                    
+    
                     title_tag = h4_title.find('a')
                     if not title_tag: continue
-                    
+    
                     title = title_tag.get('title') or title_tag.get_text(strip=True)
                     title = title.strip()
                     href = title_tag.get('href', '').strip()
-                    
-                    # 🚫 强力斩杀线：如果是绝对路径外链或带引流特征，直接踢出
+    
+                    # 🚫 强力斩杀线一：如果是绝对路径外链（比如广告的 https://nnzz...），直接踢出
                     if href.startswith('http://') or href.startswith('https://'): continue
                     if any(x in href for x in ['javascript', 'about:', 'index.php', 'channelCode']): continue
-                    if not title or any(x in title for x in ["勾引", "强上", "性爱"]): continue 
 
-                    # 📅 精准吸附更新日期
+                    # 🎯 黄金特征校验：提取图片并强力核验域名
+                    img_tag = li.find('img') or li.find('a', class_='lazyload')
+                    cover_url = ""
+                    if img_tag:
+                        cover_url = img_tag.get('data-original') or img_tag.get('src') or ""
+    
+                    # 🔥 核心锁死：如果图片链接里不包含真正的图床域名 tutu1.space，百分之百是广告，直接扔掉！
+                    if "tutu1.space" not in cover_url: 
+                        continue
+
+                    # 📅 提取日期
                     date_val = "01-01"
                     p_sub = li.find('p', class_='sub')
                     if p_sub:
                         sub_text = p_sub.get_text(strip=True)
                         date_matches = re.findall(r'(\d{2}-\d{2})', sub_text)
-                        if date_matches:
-                            date_val = date_matches[-1] 
-                
+                        if date_matches: date_val = date_matches[-1] 
+
                     if date_val == "01-01":
                         all_dates = re.findall(r'(\d{2}-\d{2})', li.get_text(strip=True))
                         if all_dates: date_val = all_dates[-1]
-
-                    # --- 4. 截止判定 ---
-                    if p > 3 and date_val != "01-01":
-                        if date_val < stop_date_threshold:
-                            print(f"⏱️ 探测到旧日期 {date_val}，收割完成。")
-                            found_old_content = True
-                            break
 
                     # --- 5. 去重判定 ---
                     v_id_match = re.search(r'(\d+)', href)
