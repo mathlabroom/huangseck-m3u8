@@ -246,17 +246,40 @@ def crawl_category(cat, session):
                     print(f"\n🏁 第 {p} 页已无更多内容，全量收割完毕。")
                     break
 
-                # 🎯 【第一道防线】全页真视频大检测：
-                # 只要整页里有任何一个 lazyload 图片属于 tutu1.space 域名，就放行，否则说明到广告页或尽头了
+                # 🎯 【步骤一】先看这页有没有 tutu1.space（没有代表全是广告页，直接断流）
                 has_real_video = any(
                     "tutu1.space" in (img.get('data-original', '') or img.get('src', '')) 
                     for img in soup.find_all(['img', 'a'], class_='lazyload')
                 )
                 
-                if not has_real_video and p > 1: 
-                    print(f"🏁 第 {p} 页未能匹配到 tutu1.space 封面图床，安全策略触发，收工。")
+                if not has_real_video: 
+                    print(f"🏁 第 {p} 页未能匹配到任何 tutu1.space 封面，判定为纯广告垃圾页，收工。")
                     break
                 
+                # 🎯 【步骤二】有真货！立刻提取这一页“最顶部的最新日期”用来判定刹车
+                page_latest_date = None
+                for first_li in items:
+                    # 先确保这个 li 自己是真视频，而不是夹杂在顶部的置顶广告
+                    first_img = first_li.find('img') or first_li.find('a', class_='lazyload')
+                    if first_img and "tutu1.space" in (first_img.get('data-original', '') or first_img.get('src', '')):
+                        p_sub = first_li.find('p', class_='sub')
+                        if p_sub:
+                            sub_text = p_sub.get_text(" ", strip=True)
+                            date_matches = re.findall(r'(\d{2}-\d{2})', sub_text)
+                            if date_matches:
+                                page_latest_date = date_matches[-1]
+                                break  # 成功拿到这一页第一个真视频的日期，收工
+
+                # 🎯 【步骤三】对比 config.json 里的配置，是否满足刹车条件
+                if page_latest_date:
+                    # 如果当前页最新的视频日期，比你的截止线（比如 stop_date_threshold 是 06-14）还要旧
+                    # 注意：跨年边缘（如01-01与12-31）在直接字符串对比时需注意，普通日常更新直接对比即可
+                    if page_latest_date < stop_date_threshold:
+                        print(f"\n🛑 [日期触线刹车] 第 {p} 页最新资源日期为 {page_latest_date}，已落后于设定阈值 {stop_date_threshold}，强制收工！")
+                        break
+                else:
+                    print(f"⚠️ 未能提取到第 {p} 页的头部日期标签，安全起见继续扫描...")
+
                 print(f"🌐 正在扫描第 {p} 页...", end="\r")
                 
                 for li in items:
