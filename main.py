@@ -274,37 +274,40 @@ def crawl_category(cat, session):
                     if href.startswith('http://') or href.startswith('https://'): continue
                     if any(x in href for x in ['javascript', 'about:', 'index.php', 'channelCode']): continue
 
-                    # 🎯 【第二道防线】单条精准过滤：
-                    # 抓取当前这条资源的封面图
+                    # 🎯 【图片防线】单条精准过滤
                     img_tag = li.find('img') or li.find('a', class_='lazyload')
                     cover_url = ""
                     if img_tag:
                         cover_url = img_tag.get('data-original') or img_tag.get('src') or ""
                     
-                    # 🔥 核心锁死：如果单条视频的图片里不包含真正的图床域名，百分之百是穿插的菠菜引流广告，直接扔掉！
+                    # 如果单条视频的图片里不包含真正的图床域名，百分之百是穿插的菠菜引流广告，直接扔掉！
                     if "tutu1.space" not in cover_url: 
                         continue
 
-                    # 📅 提取日期（仅用作台单展示）
+                    # 📅 【精准吸附更新日期】（拿回日期，但绝不执行 break 拦截！）
                     date_val = "01-01"
                     p_sub = li.find('p', class_='sub')
                     if p_sub:
-                        sub_text = p_sub.get_text(strip=True)
+                        # 拿到 <p class="sub"> 下的所有文本（洗掉 HTML 标签，只留纯文本，比如 "62 68309 09-18"）
+                        sub_text = p_sub.get_text(" ", strip=True)
+                        # 用正则抠出最后的 xx-xx 格式日期
                         date_matches = re.findall(r'(\d{2}-\d{2})', sub_text)
-                        if date_matches: date_val = date_matches[-1] 
+                        if date_matches: 
+                            date_val = date_matches[-1] 
                 
+                    # 如果上面没拿到，做个全行保底搜寻
                     if date_val == "01-01":
                         all_dates = re.findall(r'(\d{2}-\d{2})', li.get_text(strip=True))
-                        if all_dates: date_val = all_dates[-1]
+                        if all_dates: 
+                            date_val = all_dates[-1]
 
-
-                    # --- 5. 去重判定 ---
+                    # --- 去重判定与后续解密 ---
                     v_id_match = re.search(r'(\d+)', href)
                     if not v_id_match: continue
                     v_id = v_id_match.group(1)
                     if v_id in db_set: continue
 
-                    # --- 6. 捕获 M3U8 (解密/常规双保底) ---
+                    # --- 捕获 M3U8 ---
                     try:
                         full_link = urllib.parse.urljoin(BASE_URL, href)
                         play_link = full_link + ("&" if "?" in full_link else "?") + "play=1"
@@ -313,8 +316,6 @@ def crawl_category(cat, session):
                         p_res.encoding = 'utf-8'
                         
                         m3u8 = ""
-                        
-                        # ✨ 策略 A：如果触发了加密墙，且环境支持，直接硬解
                         if "window.VPCFG" in p_res.text and "window.VPFK" in p_res.text:
                             if has_crypto:
                                 try:
@@ -331,28 +332,22 @@ def crawl_category(cat, session):
                             else:
                                 print("   ⚠️ 遭遇验证墙，但因缺乏 cryptography 库，无法解密！")
                         
-                        # ✨ 策略 B：老版本兼容（如果没有加密墙，直接正则抓）
                         if not m3u8:
                             m3u8_match = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
                             if m3u8_match:
                                 m3u8 = m3u8_match.group(0).replace('\\/', '/').replace('\\', '')
 
-                        # 保存逻辑
                         if m3u8:
                             if "%" in m3u8:
                                 m3u8 = urllib.parse.unquote(m3u8)
 
-                            img_tag = li.find('img') or li.find('a', class_='lazyload')
-                            cover_url = ""
-                            if img_tag:
-                                cover_url = img_tag.get('data-original') or img_tag.get('src') or ""
-
+                            # 🌟 日期在这里被完美重新组装进台单！
                             item_entry = f'#EXTINF:-1 tvg-logo="{cover_url}",{title} [{date_val}]\n{m3u8}\n'
                             all_new_entries.append(item_entry)
                             db.append(v_id)
                             db_set.add(v_id)
                             stats["new"] += 1
-                            print(f"  ✅ [解密成功] {date_val} | {title[:15]}...")
+                            print(f"   ✅ [解密成功] {date_val} | {title[:15]}...")
                             
                             if stats["new"] > 0 and stats["new"] % 1000 == 0:
                                 save_and_update(save_path, all_new_entries, db, db_file)
