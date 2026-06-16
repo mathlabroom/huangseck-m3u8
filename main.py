@@ -361,8 +361,8 @@ def crawl_category(cat, session):
                     except Exception:
                         continue
 
-                if found_old_content: break
-                time.sleep(1.5)
+
+                time.sleep(1.2)
 
             except Exception as e:
                 print(f"  🚨 页面出错: {e}")
