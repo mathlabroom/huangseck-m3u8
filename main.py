@@ -400,7 +400,7 @@ def crawl_category(cat, session):
     return stats
 
 # --- 7. E2 Bouquet 转换 ---
-def convert_to_e2_bouquets():
+def convert_to_e2_bouquets(report_list=None):
     BASE_DIR = './VideoResults'
     OUTPUT_DIR = './E2_Bouquets'
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -409,9 +409,23 @@ def convert_to_e2_bouquets():
         "日本有码": "69", "日本无码": "6A", "欧美高清": "6B", "动漫": "6C"
     }
 
+    # 把报告转换成字典方便快速查询，如 {"国产系列": 0, "日本有码": 3}
+    report_dict = {r['name']: r.get('new', 0) for r in report_list if isinstance(r, dict)} if report_list else {}
+
     for cat_name, hex_id in CATEGORY_MAP.items():
         m3u8_path = os.path.join(BASE_DIR, cat_name, f"{cat_name}.m3u8")
+        tv_path = os.path.join(OUTPUT_DIR, f"subbouquet.{cat_name}.tv")
+        gz_path = tv_path + '.gz'
+        
         if not os.path.exists(m3u8_path): continue
+        
+        # 🎯 【精准拦截点】如果这个分类今天新增为 0，且本地早就有打包好的 .tv.gz 了，直接无视，绝不重写！
+        if report_dict.get(cat_name, 0) == 0 and os.path.exists(gz_path):
+            print(f"      ℹ️ 分类【{cat_name}】今日无新增，完美跳过 E2 转换与打包。")
+            continue
+
+        # 只有有新货的分类，才会走到下面的重写逻辑
+        print(f"      🗜️ 分类【{cat_name}】探测到新资源，正在刷新 .tv 并重新打包 .tv.gz...")
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
@@ -429,8 +443,14 @@ def convert_to_e2_bouquets():
                 output_lines.append(f"#DESCRIPTION {title}")
                 sid += 1
         
-        with open(os.path.join(OUTPUT_DIR, f"subbouquet.{cat_name}.tv"), 'w', encoding='utf-8') as f:
+        # 写入 .tv
+        with open(tv_path, 'w', encoding='utf-8') as f:
             f.write("\n".join(output_lines) + "\n")
+            
+        # 顺手直接把这个变动的分类打成 .tv.gz
+        with open(tv_path, 'rb') as f_in:
+            with gzip.open(gz_path, 'wb') as f_out:
+                f_out.writelines(f_in)
 
 if __name__ == "__main__":
     start_time = time.time()
@@ -463,42 +483,32 @@ if __name__ == "__main__":
     finally:
         print(f"\n{'='*30}\n收割总结 (今日日期: {datetime.now().strftime('%m-%d')})\n{'='*30}")
         
-        try:
-            convert_to_e2_bouquets()
-            
-            E2_DIR = './E2_Bouquets'
-            if os.path.exists(E2_DIR):
-                for file_name in os.listdir(E2_DIR):
-                    if file_name.endswith('.tv'):
-                        tv_path = os.path.join(E2_DIR, file_name)
-                        gz_path = tv_path + '.gz'
-                        with open(tv_path, 'rb') as f_in:
-                            with gzip.open(gz_path, 'wb') as f_out:
-                                f_out.writelines(f_in)
-                print("🗜️ [压缩成功] E2_Bouquets 目录下的 .tv 文件已全部同步生成 .tv.gz")
-            
-        except Exception as e:
-            print(f"⚠️ E2 节目单转换或压缩失败: {e}")
+        total_all = sum(r.get('new', 0) for r in report if isinstance(r, dict)) if 'report' in locals() and report else 0
+        summary_text = "\n".join([f"- {r['name']}: +{r['new']}" for r in report]) if 'report' in locals() and report else ""
 
-        # 汇总报告与强制同步
-        if 'report' in locals() and report:
-            total_all = sum(r.get('new', 0) for r in report if isinstance(r, dict))
-            summary_text = "\n".join([f"- {r['name']}: +{r['new']}" for r in report])
-            
-            print(f"📊 详细汇总:\n{summary_text}")
-            
-            if total_all > 0:
-                if os.getenv("GITHUB_ACTIONS") == "true":
-                    msg_title = f"🚀 今日收割完成！新增 {total_all} 条"
-                    msg_content = f"### 📥 自动收割汇总\n\n{summary_text}\n\n---\n📅 结束时间：{datetime.now().strftime('%m-%d %H:%M')}"
-                    send_wechat(msg_title, msg_content)
-                else:
-                    print(f"🏠 本地运行检测到新数据...")
+        if total_all > 0:
+            print("🔄 正在启动按需精准增量打包...")
+            try:
+                # 🎯 传入今日战果报告，里面会自动判定谁该打包，谁该躺平
+                convert_to_e2_bouquets(report)
+            except Exception as e:
+                print(f"⚠️ E2 精准转换或压缩失败: {e}")
 
-                git_push_backup(total_all)
+            print(f"\n📊 详细汇总:\n{summary_text}")
+            if os.getenv("GITHUB_ACTIONS") == "true":
+                msg_title = f"🚀 今日收割完成！新增 {total_all} 条"
+                msg_content = f"### 📥 自动收割汇总\n\n{summary_text}\n\n---\n📅 结束时间：{datetime.now().strftime('%m-%d %H:%M')}"
+                send_wechat(msg_title, msg_content)
             else:
-                print("ℹ️ 库内无数据更新，跳过同步。")
+                print(f"🏠 本地运行检测到新数据...")
+
+            git_push_backup(total_all)
+            
         else:
-            print("ℹ️ 任务结束，未生成有效报告。")
+            if 'report' in locals() and report:
+                print("\n".join([f"- {r['name']}: 0" for r in report]))
+            print("\nℹ️ 库内无任何数据更新，全量躺平，跳过所有写入与 Git 同步。")
+
+        print(f"✅ 流程全部结束，耗时: {time.time()-start_time:.1f}s")
 
         print(f"✅ 流程全部结束，耗时: {time.time()-start_time:.1f}s")
