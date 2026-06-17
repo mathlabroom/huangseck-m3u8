@@ -246,34 +246,30 @@ def crawl_category(cat, session):
                     print(f"\n🏁 第 {p} 页已无更多内容，全量收割完毕。")
                     break
 
-                # 🎯 【步骤一】先看这页有没有 tutu1.space（没有代表全是广告页，直接断流）
+                # 🎯 【步骤一】全页真视频大检测（全区域模糊匹配，广告页直接绝杀）
                 has_real_video = any(
-                    "tutu1.space" in (img.get('data-original', '') or img.get('src', '')) 
-                    for img in soup.find_all(['img', 'a'], class_='lazyload')
+                    "tutu1.space" in str(li) for li in items
                 )
-                
+
                 if not has_real_video: 
-                    print(f"🏁 第 {p} 页未能匹配到任何 tutu1.space 封面，判定为纯广告垃圾页，收工。")
+                    print(f"🏁 第 {p} 页未能匹配到任何 tutu1.space 黄金特征，判定为纯广告垃圾页，收工。")
                     break
                 
-                # 🎯 【步骤二】有真货！立刻提取这一页“最顶部的最新日期”用来判定刹车
+                # 🎯 【步骤二】有真货！立刻提取这一页“最新真视频的日期”用来判定刹车
                 page_latest_date = None
                 for first_li in items:
-                    # 先确保这个 li 自己是真视频，而不是夹杂在顶部的置顶广告
-                    first_img = first_li.find('img') or first_li.find('a', class_='lazyload')
-                    if first_img and "tutu1.space" in (first_img.get('data-original', '') or first_img.get('src', '')):
+                    # 只要这个 li 包含黄金域名，说明它是这一页排在最上面的真视频（刨除置顶广告）
+                    if "tutu1.space" in str(first_li):
                         p_sub = first_li.find('p', class_='sub')
                         if p_sub:
                             sub_text = p_sub.get_text(" ", strip=True)
                             date_matches = re.findall(r'(\d{2}-\d{2})', sub_text)
                             if date_matches:
                                 page_latest_date = date_matches[-1]
-                                break  # 成功拿到这一页第一个真视频的日期，收工
+                                break  # 剥离出最新日期，功成身退
 
-                # 🎯 【步骤三】对比 config.json 里的配置，是否满足刹车条件
+                # 🎯 【步骤三】对比截止日期，决定是否一脚踩死刹车
                 if page_latest_date:
-                    # 如果当前页最新的视频日期，比你的截止线（比如 stop_date_threshold 是 06-14）还要旧
-                    # 注意：跨年边缘（如01-01与12-31）在直接字符串对比时需注意，普通日常更新直接对比即可
                     if page_latest_date < stop_date_threshold:
                         print(f"\n🛑 [日期触线刹车] 第 {p} 页最新资源日期为 {page_latest_date}，已落后于设定阈值 {stop_date_threshold}，强制收工！")
                         break
@@ -282,6 +278,7 @@ def crawl_category(cat, session):
 
                 print(f"🌐 正在扫描第 {p} 页...", end="\r")
                 
+                # --- 开始单条收割 ---
                 for li in items:
                     h4_title = li.find('h4', class_='title')
                     if not h4_title: continue
@@ -297,28 +294,35 @@ def crawl_category(cat, session):
                     if href.startswith('http://') or href.startswith('https://'): continue
                     if any(x in href for x in ['javascript', 'about:', 'index.php', 'channelCode']): continue
 
-                    # 🎯 【图片防线】单条精准过滤
-                    img_tag = li.find('img') or li.find('a', class_='lazyload')
-                    cover_url = ""
-                    if img_tag:
-                        cover_url = img_tag.get('data-original') or img_tag.get('src') or ""
-                    
-                    # 如果单条视频的图片里不包含真正的图床域名，百分之百是穿插的菠菜引流广告，直接扔掉！
-                    if "tutu1.space" not in cover_url: 
+                    # 🎯 【图片防线】单条精准区域过滤
+                    # 只要整个 <li> 块的 HTML 源码里不包含核心域名，百分之百是牛皮癣，直接扔掉！
+                    if "tutu1.space" not in str(li): 
                         continue
 
-                    # 📅 【精准吸附更新日期】（拿回日期，但绝不执行 break 拦截！）
+                    # 📸 【智能多手保底】安全提取封面图
+                    cover_url = ""
+                    img_tag = li.find(['img', 'a'], class_='lazyload') or li.find('img')
+                    if img_tag:
+                        # 广撒网属性提取
+                        cover_url = (img_tag.get('data-original') or 
+                                     img_tag.get('src') or 
+                                     img_tag.get('data-src') or "")
+                    
+                    # 🛡️ 终极正则保底：如果属性没捞着，直接从 HTML 源码中生吞带特征的 URL
+                    if not cover_url or "tutu1.space" not in cover_url:
+                        img_urls = re.findall(r'(https?://[^\s"\']+tutu1\.space[^\s"\']+)', str(li))
+                        if img_urls:
+                            cover_url = img_urls[0]
+
+                    # 📅 【精准吸附更新日期】（老哥你原版这段正则保底写得很好，保留）
                     date_val = "01-01"
                     p_sub = li.find('p', class_='sub')
                     if p_sub:
-                        # 拿到 <p class="sub"> 下的所有文本（洗掉 HTML 标签，只留纯文本，比如 "62 68309 09-18"）
                         sub_text = p_sub.get_text(" ", strip=True)
-                        # 用正则抠出最后的 xx-xx 格式日期
                         date_matches = re.findall(r'(\d{2}-\d{2})', sub_text)
                         if date_matches: 
                             date_val = date_matches[-1] 
                 
-                    # 如果上面没拿到，做个全行保底搜寻
                     if date_val == "01-01":
                         all_dates = re.findall(r'(\d{2}-\d{2})', li.get_text(strip=True))
                         if all_dates: 
