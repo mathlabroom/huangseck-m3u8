@@ -510,5 +510,3 @@ if __name__ == "__main__":
             print("\nℹ️ 库内无任何数据更新，全量躺平，跳过所有写入与 Git 同步。")
 
         print(f"✅ 流程全部结束，耗时: {time.time()-start_time:.1f}s")
-
-        print(f"✅ 流程全部结束，耗时: {time.time()-start_time:.1f}s")
