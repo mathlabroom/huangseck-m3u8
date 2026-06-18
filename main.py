@@ -334,7 +334,7 @@ def crawl_category(cat, session):
                     v_id = v_id_match.group(1)
                     if v_id in db_set: continue
 
-                    # --- 捕获 M3U8 ---
+                    # --- 捕获 M3U8（双防线兼容升级版） ---
                     try:
                         full_link = urllib.parse.urljoin(BASE_URL, href)
                         play_link = full_link + ("&" if "?" in full_link else "?") + "play=1"
@@ -343,6 +343,8 @@ def crawl_category(cat, session):
                         p_res.encoding = 'utf-8'
                         
                         m3u8 = ""
+                        
+                        # 🛡️ 防线一：老版本 Fernet 密文墙
                         if "window.VPCFG" in p_res.text and "window.VPFK" in p_res.text:
                             if has_crypto:
                                 try:
@@ -355,10 +357,47 @@ def crawl_category(cat, session):
                                     json_data = json.loads(decrypted_data)
                                     m3u8 = json_data.get('url', '')
                                 except Exception as decrypt_err:
-                                    print(f"   ❌ 算法破译失败: {decrypt_err}")
+                                    print(f"   ❌ 密码墙 Fernet 破译失败: {decrypt_err}")
                             else:
-                                print("   ⚠️ 遭遇验证墙，但因缺乏 cryptography 库，无法解密！")
+                                print("   ⚠️ 遭遇 Fernet 验证墙，但因缺乏 cryptography 库，无法解密！")
                         
+                        # 🛡️ 防线二：新版本 /vp_url.php 异步 Base64 加密墙（截胡核心）
+                        elif "vp_url.php" in p_res.text or "VPID" in p_res.text:
+                            try:
+                                import base64
+                                # 提取异步所需的三个关键 ID
+                                vpid_m = re.search(r"var\s+VPID\s*=\s*'(\d+)'", p_res.text) or re.search(r'data-id="(\d+)"', p_res.text)
+                                vpsid_m = re.search(r"var\s+VPSID\s*=\s*'(\d+)'", p_res.text)
+                                vpnid_m = re.search(r"var\s+VPNID\s*=\s*'(\d+)'", p_res.text)
+                                
+                                if vpid_m:
+                                    vpid = vpid_m.group(1)
+                                    vpsid = vpsid_m.group(1) if vpsid_m else "1"
+                                    vpnid = vpnid_m.group(1) if vpnid_m else "1"
+                                    
+                                    # 伪装前端异步请求头
+                                    ajax_headers = {
+                                        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                                        "X-Requested-With": "XMLHttpRequest",
+                                        "Origin": BASE_URL.rstrip('/'),
+                                        "Referer": play_link
+                                    }
+                                    post_data = {
+                                        "id": vpid, "sid": vpsid, "nid": vpnid, "t": str(int(time.time() * 1000))
+                                    }
+                                    
+                                    api_url = f"{BASE_URL.rstrip('/')}/vp_url.php"
+                                    api_res = session.post(api_url, data=post_data, headers=ajax_headers, timeout=10)
+                                    
+                                    if api_res.status_code == 200:
+                                        res_json = api_res.json()
+                                        if res_json.get("ok") and res_json.get("u"):
+                                            # 解密前端 base64 字符串（对应 atob）
+                                            m3u8 = base64.b64decode(res_json["u"]).decode('utf-8')
+                            except Exception as ajax_err:
+                                print(f"   ❌ 新版 Ajax 接口截胡失败: {ajax_err}")
+
+                        # 🛡️ 防线三：无验证直接暴露的纯净老网页正则保底
                         if not m3u8:
                             m3u8_match = re.search(r'https?[:\\\/]+[^"\']+\.m3u8[^"\']*', p_res.text, re.I)
                             if m3u8_match:
