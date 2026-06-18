@@ -2,9 +2,9 @@
 
 🌐 utils_crawler.py（网络尖兵）：只负责测活域名、拿 Session。
 
-🕵️‍♂️ utils_parser.py（新·数据抓取）：负责解析页面、提取基础列表和日期刹车。
+🕵️‍♂️ utils_parser.py（数据抓取）：负责解析页面、提取基础列表和日期刹车。
 
-🔐 utils_decryptor.py（新·密码破译）：专注于三道 M3U8 墙的破解。
+🔐 utils_decryptor.py（密码破译）：专注于三道 M3U8 墙的破解。
 
 💾 utils_exporter.py（账房先生）：负责 M3U8/E2 落盘写入、去重。
 
