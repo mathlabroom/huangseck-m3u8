@@ -328,12 +328,24 @@ def crawl_category(cat, session):
                         if all_dates: 
                             date_val = all_dates[-1]
 
-                    # --- 去重判定与后续解密 ---
-                    v_id_match = re.search(r'(\d+)', href)
+                   # --- 去重判定与后续解密（终极洗髓版） ---
+                    # 1. 扔掉所有目录路径，只要最后的文件名，如 "208352-1-1.html"
+                    file_name = href.split('/')[-1]  
+                    
+                    # 2. 抠出文件名里的第一串连续数字
+                    v_id_match = re.search(r'(\d+)', file_name) 
                     if not v_id_match: continue
                     v_id = v_id_match.group(1)
-                    if v_id in db_set: continue
-
+                    
+                    # 🛡️ 严格控制：如果抠出来的 ID 长度太短（说明是残次品或纯广告），直接绝杀跳过，不浪费网络请求
+                    if len(v_id) < 4: 
+                        print(f"   ⚠️ 过滤非正常视频ID: {v_id} (文件名: {file_name})，直接跳过。")
+                        continue
+                        
+                    # 正常长度的 ID（大于等于 4 位），执行正规去重判定
+                    if v_id in db_set: 
+                        continue
+                            
                     # --- 捕获 M3U8（双防线兼容升级版） ---
                     try:
                         full_link = urllib.parse.urljoin(BASE_URL, href)
