@@ -30,8 +30,8 @@
             "name": "有码中文字幕"
         },
         {
-            "__comment__id": "22",
-            "__comment__name": "动漫"
+            "id": "22",
+            "name": "动漫"
         }
     ],
     "STOP_DAYS_AGO": 1
