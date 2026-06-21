@@ -7,6 +7,7 @@ import urllib.parse
 import urllib3
 import sys
 from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
 
 # 🎯 引入咱所有的精细化分布式组件（加上两个新兄弟）
 from utils_notifier import send_wechat, git_push_backup
@@ -33,6 +34,36 @@ def load_and_fix_config():
         print(f"📝 智能雷达已将新域名 {new_url} 写入持久化配置文件 config.json")
     return current_config
 
+def get_max_page(session, first_page_url):
+    """🕵️‍♂️ 战术侦察：从第一页源码中精准破译‘尾页’的真实最大页码"""
+    try:
+        res = session.get(first_page_url, timeout=15, verify=False)
+        if res.status_code == 200:
+            res.encoding = 'utf-8'
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            # 1. 核心狙击：寻找文本内容正好是 "尾页" 或 "末页" 的 a 标签
+            tail_tag = soup.find('a', string=re.compile(r'尾页|末页'))
+            
+            # 2. 如果因为嵌套原因没直接匹配到，遍历带 href 且文本包含尾页的标签
+            if not tail_tag:
+                for a in soup.find_all('a', href=True):
+                    if '尾页' in a.get_text() or '末页' in a.get_text():
+                        tail_tag = a
+                        break
+            
+            if tail_tag and tail_tag.get('href'):
+                href = tail_tag['href']
+                # 3. 正则提取：从 "/vodtype/8-119.html" 中把真实的末页数字抠出来
+                match = re.search(r'-(\d+)\.html', href)
+                if match:
+                    max_page = int(match.group(1))
+                    print(f"🎯 战术侦察成功！检测到【尾页】信号，当前分类实际最大页数为: {max_page} 页")
+                    return max_page
+    except Exception as e:
+        print(f"⚠️ 探测最大页码失败 (原因: {e})，将启用 9999 恢复传统兜底...")
+    return 9999
+
 def crawl_category(cat, session, config, base_url, route_path):
     cat_id, cat_name = cat["id"], cat["name"]
     db_file = f"./{cat_name}.json"
@@ -55,8 +86,13 @@ def crawl_category(cat, session, config, base_url, route_path):
     except ImportError:
         print("⚠️ 提示: 未检测到 cryptography 库，将无法破解老版验证墙。")
 
+    # 📡 【战术前瞻】：先探测当前分类第一页的源码，动态解出真实的最大页码限制
+    first_page_url = f"{base_url}{route_path}{cat_id}-1.html"
+    real_max_page = get_max_page(session, first_page_url)
+
     try:
-        for p in range(1, 10000):
+        # 🔄 【自适应循环】：用解出的真实页码（+1是因为range右开区间）代替死板的 10000
+        for p in range(1, real_max_page + 1):
             url = f"{base_url}{route_path}{cat_id}-{p}.html"
             try:
                 res = session.get(url, timeout=15, verify=False)
@@ -76,7 +112,7 @@ def crawl_category(cat, session, config, base_url, route_path):
                     print(f"\n🛑 [日期触线刹车] 页首日期 {video_items[0]['date_val']} 落后于设定阈值 {stop_date_threshold}，强制收工！")
                     break
 
-                print(f"🌐 正在扫描第 {p} 页...", end="\r")
+                print(f"🌐 正在扫描第 {p}/{real_max_page} 页...", end="\r")
                 
                 for item in video_items:
                     file_name = item["href"].split('/')[-1]  
