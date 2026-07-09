@@ -7,7 +7,7 @@ import random
 import urllib.parse
 from urllib.parse import urljoin
 
-def smart_decrypt_m3u8(p_res, play_link, base_url, session):
+def decrypt_m3u8(p_res, play_link, base_url, session):
     """
     通用智能自适应解密算法 (专治各种变体手势倒计时盾)
     放弃硬编码，改用行为特征和动态流盲搜
