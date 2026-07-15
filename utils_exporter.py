@@ -83,7 +83,7 @@ def convert_to_e2_bouquets(report_list=None):
     report_dict = {r['name']: r.get('new', 0) for r in report_list if isinstance(r, dict)} if report_list else {}
 
     for cat_name, hex_id in CATEGORY_MAP.items():
-        m3u8_path = os.path.join(BASE_DIR, cat_name, f"{cat_name}.m3u8")
+        m3u8_path = os.path.join(BASE_DIR,f"{cat_name}.m3u8")
         tv_path = os.path.join(OUTPUT_DIR, f"subbouquet.{cat_name}.tv")
         gz_path = tv_path + '.gz'
         
