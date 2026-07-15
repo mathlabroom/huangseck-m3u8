@@ -67,7 +67,7 @@ def get_max_page(session, first_page_url):
 def crawl_category(cat, session, config, base_url, route_path):
     cat_id, cat_name = cat["id"], cat["name"]
     db_file = f"./{cat_name}.json"
-    save_dir = f"./VideoResults/{cat_name}"
+    save_dir = f"./VideoResults"
     save_path = f"{save_dir}/{cat_name}.m3u8"
     os.makedirs(save_dir, exist_ok=True)
     
