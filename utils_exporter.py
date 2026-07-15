@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 🎯 支持 URL 日期精准倒序 + Enigma2 按月自动创建 Marks 分隔符完全体
+# 🎯 支持 URL 日期精准倒序 + 自动生成 m3u8.gz + Enigma2 按月自动创建 Marks 分隔符完全体
 import os
 import re
 import json
@@ -22,7 +22,8 @@ def extract_date_from_url(url):
 
 def save_and_update(path, new_lines, db_list, db_path):
     """
-    🎯 按照 URL 里的真实日期进行“倒序去重更新”，并写入 JSON 数据库
+    🎯 按照 URL 里的真实日期进行“倒序去重更新”，写入 JSON 数据库
+    新增：写入 .m3u8 文本后，自动在同目录下生成 .m3u8.gz 压缩包
     """
     items_dict = {}
     
@@ -61,8 +62,18 @@ def save_and_update(path, new_lines, db_list, db_path):
         f.write("#EXTM3U\n")
         for k in sorted_keys:
             f.write(items_dict[k] + "\n")
+            
+    # 🎯 5. 新增：自动将写入的 .m3u8 压缩为 .m3u8.gz
+    gz_m3u8_path = path + ".gz"
+    try:
+        with open(path, 'rb') as f_in:
+            with gzip.open(gz_m3u8_path, 'wb') as f_out:
+                f_out.writelines(f_in)
+        print(f"      🗜️ 列表【{os.path.basename(path)}】已成功额外打包为 .gz 压缩源文件。")
+    except Exception as e:
+        print(f"      ⚠️ 压缩 .m3u8.gz 失败: {str(e)}")
     
-    # 5. 写入数据库
+    # 6. 写入数据库
     with open(db_path, 'w', encoding='utf-8') as f:
         json.dump(db_list, f, ensure_ascii=False, indent=4)
 
@@ -83,7 +94,8 @@ def convert_to_e2_bouquets(report_list=None):
     report_dict = {r['name']: r.get('new', 0) for r in report_list if isinstance(r, dict)} if report_list else {}
 
     for cat_name, hex_id in CATEGORY_MAP.items():
-        m3u8_path = os.path.join(BASE_DIR,f"{cat_name}.m3u8")
+        # 🎯 已成功修改：m3u8 直接在 VideoResults 目录下定位
+        m3u8_path = os.path.join(BASE_DIR, f"{cat_name}.m3u8")
         tv_path = os.path.join(OUTPUT_DIR, f"subbouquet.{cat_name}.tv")
         gz_path = tv_path + '.gz'
         
