@@ -62,7 +62,18 @@ def save_and_update(path, new_lines, db_list, db_path):
         for k in sorted_keys:
             f.write(items_dict[k] + "\n")
     
-    # 5. 写入数据库
+    # 🎯 5. 核心新增：将写入的 .m3u8 压缩为同名 .m3u8.gz 并输出到相同目录下
+    gz_m3u8_path = path + ".gz"
+    try:
+        # 以二进制读取（'rb'）生成的 m3u8，并以二进制写入（'wb'）高压缩比的 gz 压缩包中
+        with open(path, 'rb') as f_in:
+            with gzip.open(gz_m3u8_path, 'wb', compresslevel=9) as f_out:
+                f_out.writelines(f_in)
+        print(f"      🗜️ 列表【{os.path.basename(path)}】已成功额外打包为 .m3u8.gz 压缩源文件。")
+    except Exception as e:
+        print(f"      ⚠️ 压缩 .m3u8.gz 失败: {str(e)}")
+        
+    # 6. 写入数据库
     with open(db_path, 'w', encoding='utf-8') as f:
         json.dump(db_list, f, ensure_ascii=False, indent=4)
 
