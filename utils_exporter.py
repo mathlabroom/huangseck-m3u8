@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 🎯 支持 URL 日期精准倒序 + 自动生成 m3u8.gz + Enigma2 按月自动创建 Marks 分隔符完全体
+# 🎯 支持 URL 日期精准倒序 + Enigma2 按月自动创建 Marks 分隔符完全体
 import os
 import re
 import json
@@ -19,6 +19,53 @@ def extract_date_from_url(url):
     if match_loose:
         return match_loose.group(1)
     return ""
+
+def save_and_update(path, new_lines, db_list, db_path):
+    """
+    🎯 按照 URL 里的真实日期进行“倒序去重更新”，并写入 JSON 数据库
+    """
+    items_dict = {}
+    
+    # 1. 读取老文件
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            blocks = re.findall(r'(#EXTINF:.*?)(?=#EXTINF:|$)', content, re.S)
+            for block in blocks:
+                clean_block = block.strip()
+                if clean_block:
+                    title_line = clean_block.split('\n')[0].strip()
+                    items_dict[title_line] = clean_block
+
+    # 2. 合并新加入的数据
+    for item in new_lines:
+        item = item.strip()
+        if item:
+            title_line = item.split('\n')[0].strip()
+            items_dict[title_line] = item
+
+    # 3. 🧠 核心排序改良：根据 block 内部 url 里的日期进行降序(reverse=True)排序
+    # 如果两个 URL 日期相同，则维持原标题的 ASCII 字典序排序
+    def sort_key_by_url_date(title_key):
+        block_content = items_dict[title_key]
+        lines = block_content.split('\n')
+        url = lines[-1].strip() if lines else ""
+        date_str = extract_date_from_url(url)
+        # 返回 (日期字符串, 标题字符串) 作为复合排序键
+        return (date_str, title_key)
+
+    sorted_keys = sorted(items_dict.keys(), key=sort_key_by_url_date, reverse=True) 
+
+    # 4. 写入 M3U8 文件
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write("#EXTM3U\n")
+        for k in sorted_keys:
+            f.write(items_dict[k] + "\n")
+    
+    # 5. 写入数据库
+    with open(db_path, 'w', encoding='utf-8') as f:
+        json.dump(db_list, f, ensure_ascii=False, indent=4)
+
 
 def convert_to_e2_bouquets(report_list=None):
     """
