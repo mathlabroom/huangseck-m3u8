@@ -7,28 +7,19 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-def get_valid_base_url(current_url):
-    """智能探路者：验证当前域名，若失效则通过固定发布页自动追踪"""
+def get_valid_base_url():
+    """智能探路者：不再记忆旧域名，每次均直接通过发布页追踪获取最新域名"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-    
-    print(f"🔍 正在验证当前预设域名: {current_url}")
-    try:
-        if current_url:
-            res = requests.get(f"{current_url}/vodtype/2-1.html", headers=headers, timeout=6, verify=False)
-            if res.status_code == 200 and "stui-vodlist" in res.text:
-                print("✅ 预设域名依然稳健有效，继续执行。")
-                return current_url
-    except:
-        pass
-
-    print("⚠️ 预设域名已失效！启动智能追踪器搜寻新入口...")
     anchor_host = "http://hsck.us" 
+    
+    print("⚠️ 启动智能追踪器，直接从发布页搜寻最新入口...")
     try:
         print(f"📡 正在请求永久发布页: {anchor_host}")
         req_res = requests.get(anchor_host, headers=headers, timeout=10, verify=False)
         html = req_res.text
         soup = BeautifulSoup(html, "lxml" if "lxml" in html else "html.parser")
 
+        # 1. 尝试匹配动态跳转接口
         if "strU=" in html and soup.find(id="hao123"):
             match = re.search(r'strU="(https?://[a-zA-Z0-9:/.]+\?u=?)"', html)
             if match:
@@ -43,14 +34,15 @@ def get_valid_base_url(current_url):
                         print(f"🚀 [追踪成功] 通过重定向接口捕获到最新官网: {discovered_url}")
                         return discovered_url
 
+        # 2. 如果发布页自身就已经展示了官网内容
         if len(html) > 20000 and soup.find(class_="stui-warp-content"):
             print(f"🚀 [寻路成功] 发布页本身已展现官网特征，直接采用: {anchor_host}")
             return anchor_host
     except Exception as tracker_err:
         print(f"❌ 智能寻路系统发生故障: {tracker_err}")
 
-    print("⚠️ 寻路系统未能探明新域名，维持原域名进入观察期。")
-    return current_url
+    print("⚠️ 寻路系统未能探明新域名，后备退回发布页根域名。")
+    return anchor_host
 
 def get_route_path(base_url, session):
     """直接从首页源码解析出当前的分类路由格式"""
