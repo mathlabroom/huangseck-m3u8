@@ -27,7 +27,7 @@ def load_and_fix_config():
         except: current_config = default_config
     else: current_config = default_config
     old_url = current_config.get("BASE_URL", "")
-    new_url = get_valid_base_url(old_url)
+    new_url = get_valid_base_url()
     if old_url != new_url:
         current_config["BASE_URL"] = new_url
         with open(config_path, "w", encoding="utf-8") as f: json.dump(current_config, f, indent=4, ensure_ascii=False)
