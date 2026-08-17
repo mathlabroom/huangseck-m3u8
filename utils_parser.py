@@ -11,7 +11,7 @@ def parse_page_items(html_text):
     items = soup.find_all('li')
     
     # 特征检查
-    if not items or not any("tutu1.space" in str(li) for li in items):
+    if not items or not any("tukaka.space" in str(li) for li in items):
         return None  # 空页或者广告垃圾页
 
     parsed_list = []
@@ -26,15 +26,15 @@ def parse_page_items(html_text):
         
         if href.startswith('http://') or href.startswith('https://'): continue
         if any(x in href for x in ['javascript', 'about:', 'index.php', 'channelCode']): continue
-        if "tutu1.space" not in str(li): continue
+        if "tukaka.space" not in str(li): continue
 
         # 提取封面
         cover_url = ""
         img_tag = li.find(['img', 'a'], class_='lazyload') or li.find('img')
         if img_tag:
             cover_url = (img_tag.get('data-original') or img_tag.get('src') or img_tag.get('data-src') or "")
-        if not cover_url or "tutu1.space" not in cover_url:
-            img_urls = re.findall(r'(https?://[^\s"\']+tutu1\.space[^\s"\']+)', str(li))
+        if not cover_url or "tukaka.space" not in cover_url:
+            img_urls = re.findall(r'(https?://[^\s"\']+tukaka\.space[^\s"\']+)', str(li))
             if img_urls: cover_url = img_urls[0]
 
         # 提取日期
