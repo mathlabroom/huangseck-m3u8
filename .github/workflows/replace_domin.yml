@@ -1,0 +1,11 @@
+- name: 替换域名并重新打包 gz
+      run: python replace_and_compress.py
+
+    - name: 提交并推送更改
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add VideoResults/
+        # 避免没有变化时 commit 报错
+        git diff-index --quiet HEAD || git commit -m "chore: 替换 m3u8 域名并更新 gz 压缩包"
+        git push
