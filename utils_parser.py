@@ -11,7 +11,7 @@ def parse_page_items(html_text):
     items = soup.find_all('li')
     
     # 特征检查
-    if not items or not any("tukaka.space" in str(li) for li in items):
+    if not items or not any("pic-text" in str(li) for li in items):
         return None  # 空页或者广告垃圾页
 
     parsed_list = []
