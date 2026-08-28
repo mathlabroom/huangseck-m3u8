@@ -1,11 +1,28 @@
-- name: 替换域名并重新打包 gz
+name: Manual Replace M3U8 Domain & Regzip
+
+on:
+  workflow_dispatch: # 关键：加了这个才会出现“Run workflow”手动触发按钮
+
+jobs:
+  run-replace:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 拉取仓库代码
+      uses: actions/checkout@v4
+
+    - name: 设置 Python 环境
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: 执行替换与压缩脚本
       run: python replace_and_compress.py
 
-    - name: 提交并推送更改
+    - name: 提交并推送更改到仓库
       run: |
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         git add VideoResults/
-        # 避免没有变化时 commit 报错
-        git diff-index --quiet HEAD || git commit -m "chore: 替换 m3u8 域名并更新 gz 压缩包"
+        git diff-index --quiet HEAD || git commit -m "chore: 替换 VideoResults 域名并重新生成 gz 压缩包"
         git push
