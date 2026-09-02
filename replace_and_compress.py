@@ -4,8 +4,8 @@ import shutil
 
 # 目标文件夹目录
 TARGET_DIR = "VideoResults"
-OLD_DOMAIN = "tutututu.cyou"
-NEW_DOMAIN = "cktutu.lifestyle"
+OLD_DOMAIN = "cktutu.lifestyle"
+NEW_DOMAIN = "tuatu.space"
 
 def process_m3u8_files():
     if not os.path.exists(TARGET_DIR):
