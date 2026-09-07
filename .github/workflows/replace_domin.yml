@@ -15,6 +15,11 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.x'
+      
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests beautifulsoup4 cryptography
 
     - name: 执行替换与压缩脚本
       run: python replace_and_compress.py
