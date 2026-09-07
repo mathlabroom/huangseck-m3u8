@@ -2,70 +2,88 @@ import os
 import re
 import gzip
 import shutil
+import urllib3
 import requests
+from bs4 import BeautifulSoup
+
+# 禁用 requests 在 verify=False 时弹出的 InsecureRequestWarning 警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TARGET_DIR = "VideoResults"
-ENTRY_URL = "https://hsck.us"  # 中转站入口
-
-# 提取图片 URL 中域名的精准正则（带图片后缀约束）
 COVER_URL_PATTERN = r'https?://([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/[^\s"\'<>]+\.(?:jpg|jpeg|png|webp|gif)'
 
-def get_real_cover_domain():
-    """解析 hsck.us 的 JS 跳转，请求真实目标网页并提取最新封面域名"""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
+def get_valid_base_url():
+    """智能探路者：直接从发布页追踪获取最新真实主站域名"""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    anchor_host = "http://hsck.us" 
     
+    print("⚠️ 启动智能追踪器，直接从发布页搜寻最新入口...")
     try:
-        print(f"[1/3] 正在访问中转站: {ENTRY_URL} ...")
-        res_entry = requests.get(ENTRY_URL, headers=headers, timeout=10)
-        res_entry.encoding = 'utf-8'
-        
-        # 1. 用正则匹配出 JS 中的真实跳转地址 strU (如 "https://5858.space:8899/?u=...")
-        redirect_match = re.search(r'var\s+strU\s*=\s*["\']([^"\']+)["\']', res_entry.text)
-        if not redirect_match:
-            print("[ERROR] 未能从中转站源码中解析出跳转 URL (strU)。")
-            return None
-        
-        real_url = redirect_match.group(1)
-        # 容错处理：如果 strU 里面拼了 window.location，剔除结尾未定义的 JS 变量拼接
-        real_url = real_url.split('?')[0]  # 拿到基础域名/页面地址，如 https://5858.space:8899
-        print(f"[2/3] 解析出真实目标地址: {real_url}")
+        print(f"📡 正在请求永久发布页: {anchor_host}")
+        req_res = requests.get(anchor_host, headers=headers, timeout=10, verify=False)
+        html = req_res.text
+        soup = BeautifulSoup(html, "lxml" if "lxml" in html else "html.parser")
 
-        # 2. 请求真实的网页内容
-        res_target = requests.get(real_url, headers=headers, timeout=12)
-        res_target.encoding = 'utf-8'
+        # 1. 尝试匹配动态跳转接口
+        if "strU=" in html and soup.find(id="hao123"):
+            match = re.search(r'strU="(https?://[a-zA-Z0-9:/.]+\?u=?)"', html)
+            if match:
+                redirect_url = f"{match.group(1)}{anchor_host}/&p=/"
+                print(f"🔗 捕获到动态跳转接口: {redirect_url}，正在追踪最终归宿...")
+                track_res = requests.head(redirect_url, headers=headers, timeout=8, verify=False, allow_redirects=False)
+                location = track_res.headers.get("Location")
+                if location:
+                    loc_match = re.match(r"(https?://[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+)", location)
+                    if loc_match:
+                        discovered_url = loc_match.group(1)
+                        print(f"🚀 [追踪成功] 通过重定向接口捕获到最新官网: {discovered_url}")
+                        return discovered_url
+
+        # 2. 如果发布页自身就已经展示了官网内容
+        if len(html) > 20000 and soup.find(class_="stui-warp-content"):
+            print(f"🚀 [寻路成功] 发布页本身已展现官网特征，直接采用: {anchor_host}")
+            return anchor_host
+    except Exception as tracker_err:
+        print(f"❌ 智能寻路系统发生故障: {tracker_err}")
+
+    print("⚠️ 寻路系统未能探明新域名，后备退回发布页根域名。")
+    return anchor_host
+
+def fetch_latest_cover_domain(base_url):
+    """访问真实官网提取最新的【封面图片域名】"""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    try:
+        print(f"🔍 正在请求真实官网 {base_url} 提取最新封面图域名...")
+        res = requests.get(base_url, headers=headers, timeout=10, verify=False)
+        res.encoding = 'utf-8'
         
-        if res_target.status_code == 200:
-            # 3. 从真实网页源码中提取最新的封面域名
-            cover_match = re.search(COVER_URL_PATTERN, res_target.text, re.IGNORECASE)
-            if cover_match:
-                latest_domain = cover_match.group(1)
-                print(f"[3/3] 成功从真实目标页抓取到最新【封面域名】: {latest_domain}")
-                return latest_domain
-            else:
-                print("[ERROR] 已进入真实网页，但未在源码中匹配到图片域名。")
+        # 精准正则匹配带图片后缀的 URL 域名
+        cover_match = re.search(COVER_URL_PATTERN, res.text, re.IGNORECASE)
+        if cover_match:
+            cover_domain = cover_match.group(1)
+            print(f"🎯 [提取成功] 捕获到最新有效封面域名: {cover_domain}")
+            return cover_domain
         else:
-            print(f"[ERROR] 请求真实目标页失败，状态码: {res_target.status_code}")
-
+            print("❌ 未在官网 HTML 中匹配到符合后缀条件的封面图片。")
     except Exception as e:
-        print(f"[ERROR] 执行跳转抓取过程发生异常: {e}")
-        
+        print(f"❌ 访问真实官网提取封面失败: {e}")
     return None
 
 def process_m3u8_files():
-    # 1. 自动解解析跳转并获取最新封面域名
-    new_cover_domain = get_real_cover_domain()
+    # 1. 获取最新官网地址
+    real_base_url = get_valid_base_url()
     
+    # 2. 访问官网提取封面图片域名
+    new_cover_domain = fetch_latest_cover_domain(real_base_url)
     if not new_cover_domain:
-        print("[ABORT] 无法获取最新封面域名，任务终止。")
+        print("⛔ 无法确定最新的封面域名，停止更新。")
         return
 
     if not os.path.exists(TARGET_DIR):
-        print(f"[WARN] 目录 '{TARGET_DIR}' 不存在，跳过处理。")
+        print(f"⚠️ 目录 '{TARGET_DIR}' 不存在，跳过处理。")
         return
 
-    # 2. 搜集 VideoResults 目录下的所有 .m3u8 文件
+    # 3. 搜集 VideoResults 目录下的所有 .m3u8 文件
     all_m3u8_files = []
     for root, _, files in os.walk(TARGET_DIR):
         for file in files:
@@ -73,20 +91,20 @@ def process_m3u8_files():
                 all_m3u8_files.append(os.path.join(root, file))
 
     if not all_m3u8_files:
-        print("[WARN] 未找到任何 .m3u8 文件。")
+        print("⚠️ 未找到任何 .m3u8 文件。")
         return
 
     replaced_count = 0
     compressed_count = 0
     file_count = len(all_m3u8_files)
 
-    # 3. 遍历本地文件替换域名并重新压包
+    # 4. 全量同步替换旧封面域名并重新压包
     for file_path in all_m3u8_files:
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
 
-            # 提取文件内的所有图片域名
+            # 提取当前文件包含的所有图片域名
             cover_domains_in_file = set(re.findall(COVER_URL_PATTERN, content, re.IGNORECASE))
             
             is_modified = False
@@ -99,9 +117,9 @@ def process_m3u8_files():
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 replaced_count += 1
-                print(f"[SUCCESS] 封面域名更新为 -> {new_cover_domain}: {file_path}")
+                print(f"✅ 封面域名更新为 -> {new_cover_domain}: {file_path}")
 
-            # 4. 重新打包 .gz 文件
+            # 重新打包生成 .gz 压缩包
             gz_path = f"{file_path}.gz"
             with open(file_path, 'rb') as f_in:
                 with gzip.open(gz_path, 'wb') as f_out:
@@ -110,11 +128,12 @@ def process_m3u8_files():
             compressed_count += 1
 
         except Exception as e:
-            print(f"[ERROR] 处理文件失败 {file_path}: {e}")
+            print(f"❌ 处理文件失败 {file_path}: {e}")
 
     print(f"\n==========================================")
-    print(f"自动化处理完成！共扫描 {file_count} 个 .m3u8 文件:")
-    print(f" - 实时抓取的最新封面域名: {new_cover_domain}")
+    print(f"🎉 自动化处理完成！共扫描 {file_count} 个 .m3u8 文件:")
+    print(f" - 追踪得到的最新主站: {real_base_url}")
+    print(f" - 提取出的最新封面域名: {new_cover_domain}")
     print(f" - 修改文件数: {replaced_count}")
     print(f" - 重新生成 gz 包数: {compressed_count}")
     print(f"==========================================")
