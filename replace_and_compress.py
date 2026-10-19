@@ -11,8 +11,9 @@ from bs4 import BeautifulSoup
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TARGET_DIR = "VideoResults"
-# 精准匹配带图片后缀的完整 URL 正则
-COVER_URL_PATTERN = r'https?://([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/[^\s"\'<>]+\.(?:jpg|jpeg|png|webp|gif)'
+
+# 升级版正则：完美支持 IP+端口（如 23.225.11.173:8443）以及传统域名，同时锁定图片后缀
+COVER_URL_PATTERN = r'https?://([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:\:[0-9]+)?|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\:[0-9]+)?)/[^\s"\'<>]+\.(?:jpg|jpeg|png|webp|gif)'
 
 def get_valid_base_url():
     """智能探路者：直接从发布页追踪获取最新真实主站域名"""
@@ -35,7 +36,7 @@ def get_valid_base_url():
                 track_res = requests.head(redirect_url, headers=headers, timeout=8, verify=False, allow_redirects=False)
                 location = track_res.headers.get("Location")
                 if location:
-                    loc_match = re.match(r"(https?://[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+)", location)
+                    loc_match = re.match(r"(https?://[a-zA-Z0-9.-]+(?:\:[0-9]+)?)", location)
                     if loc_match:
                         discovered_url = loc_match.group(1)
                         print(f"🚀 [追踪成功] 通过重定向接口捕获到最新官网: {discovered_url}")
@@ -52,30 +53,30 @@ def get_valid_base_url():
     return anchor_host
 
 def fetch_latest_cover_domain(base_url):
-    """访问真实官网，抓取所有图片域名，并通过【出现频率最高】原则筛选真正的主图床"""
+    """访问真实官网，抓取所有图片地址（支持 IP:Port），并通过最高频次原则筛选"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     try:
-        print(f"🔍 正在请求真实官网 {base_url} 统计图片域名频次...")
+        print(f"🔍 正在请求真实官网 {base_url} 统计图片 IP/域名频次...")
         res = requests.get(base_url, headers=headers, timeout=10, verify=False)
         res.encoding = 'utf-8'
         
-        # 抓取页面中出现的所有图片 URL 对应的域名列表（包含重复项）
-        all_domains = re.findall(COVER_URL_PATTERN, res.text, re.IGNORECASE)
+        # 抓取页面中出现的所有图片 URL 对应的主机部分（支持 IP:port）
+        all_hosts = re.findall(COVER_URL_PATTERN, res.text, re.IGNORECASE)
         
-        if not all_domains:
-            print("❌ 未在官网 HTML 中匹配到任何符合条件的图片域名。")
+        if not all_hosts:
+            print("❌ 未在官网 HTML 中匹配到任何符合条件的图片资源。")
             return None
 
-        # 计数统计
-        domain_counts = Counter(all_domains)
-        print("📊 页面图片域名分布频次统计:")
-        for dom, count in domain_counts.most_common():
-            print(f"  - {dom}: 出现 {count} 次")
+        # 频次统计
+        host_counts = Counter(all_hosts)
+        print("📊 页面图片源分布频次统计:")
+        for host, count in host_counts.most_common():
+            print(f"  - {host}: 出现 {count} 次")
 
-        # 选出频次最高（most_common）的那个域名
-        most_common_domain, highest_count = domain_counts.most_common(1)[0]
-        print(f"🎯 [筛选成功] 确定出现次数最多 ({highest_count}次) 的真实图床域名: {most_common_domain}")
-        return most_common_domain
+        # 选出出现次数最多的那个（过滤掉偶尔出现的广告图床）
+        most_common_host, highest_count = host_counts.most_common(1)[0]
+        print(f"🎯 [筛选成功] 确定出现次数最多 ({highest_count}次) 的真实图床 (IP:Port): {most_common_host}")
+        return most_common_host
 
     except Exception as e:
         print(f"❌ 访问真实官网提取封面失败: {e}")
@@ -85,10 +86,10 @@ def process_m3u8_files():
     # 1. 追踪拿到真实官网
     real_base_url = get_valid_base_url()
     
-    # 2. 从官网按频次抓取真正的图片域名
-    new_cover_domain = fetch_latest_cover_domain(real_base_url)
-    if not new_cover_domain:
-        print("⛔ 无法定位最频繁的真实封面域名，任务终止。")
+    # 2. 从官网按频次抓取真正的图片 IP:Port
+    new_cover_host = fetch_latest_cover_domain(real_base_url)
+    if not new_cover_host:
+        print("⛔ 无法定位最频繁的真实封面地址，任务终止。")
         return
 
     if not os.path.exists(TARGET_DIR):
@@ -110,26 +111,26 @@ def process_m3u8_files():
     compressed_count = 0
     file_count = len(all_m3u8_files)
 
-    # 4. 全量同步替换旧封面域名并重新压包
+    # 4. 全量同步替换旧封面地址并重新压包
     for file_path in all_m3u8_files:
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
 
-            # 提取当前文件包含的所有图片域名
-            cover_domains_in_file = set(re.findall(COVER_URL_PATTERN, content, re.IGNORECASE))
+            # 提取当前文件包含的所有图片主机地址（IP:Port 或旧域名）
+            hosts_in_file = set(re.findall(COVER_URL_PATTERN, content, re.IGNORECASE))
             
             is_modified = False
-            for old_dom in cover_domains_in_file:
-                if old_dom != new_cover_domain:
-                    content = content.replace(old_dom, new_cover_domain)
+            for old_host in hosts_in_file:
+                if old_host != new_cover_host:
+                    content = content.replace(old_host, new_cover_host)
                     is_modified = True
 
             if is_modified:
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 replaced_count += 1
-                print(f"✅ 封面域名更新为 -> {new_cover_domain}: {file_path}")
+                print(f"✅ 封面地址更新为 -> {new_cover_host}: {file_path}")
 
             # 重新打包生成 .gz 压缩包
             gz_path = f"{file_path}.gz"
@@ -145,7 +146,7 @@ def process_m3u8_files():
     print(f"\n==========================================")
     print(f"🎉 自动化处理完成！共扫描 {file_count} 个 .m3u8 文件:")
     print(f" - 追踪到的官网地址: {real_base_url}")
-    print(f" - 频次最高（判定为真实）的封面域名: {new_cover_domain}")
+    print(f" - 筛选出的最新封面 (IP:Port): {new_cover_host}")
     print(f" - 修改文件数: {replaced_count}")
     print(f" - 重新生成 gz 包数: {compressed_count}")
     print(f"==========================================")
